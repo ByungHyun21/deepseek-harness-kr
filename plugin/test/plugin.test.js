@@ -98,7 +98,7 @@ test('sleep preserves free placement, blocks dragging and never sleeps while the
     let now = 0, stopped = false, listeners = 0
     const frames = [], timers = [], lines = []
     const context = vm.createContext({
-      PET: petPage, innerWidth: 1000, innerHeight: 800, W: 200, H: 400, SHOW_K: 0.1, visH: 400,
+      PET: petPage, innerWidth: 1000, innerHeight: 800, W: 200, H: 400, SHOW_K: 0.1, visH: 400, MIN_SHOW_K: 0.18, coarsePointer: () => false,
       performance: { now: () => now }, requestAnimationFrame: (fn) => frames.push(fn),
       setTimeout: (fn) => { timers.push(fn); return timers.length }, clearTimeout() {},
       addEventListener() { listeners++ },
@@ -491,9 +491,10 @@ test('plugin settings page exposes feature and power saving switches', () => {
     const Page = h.pages.get(packageName + '#deepseek-harness-kr')
     assert(Page)
     const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
-    assert.equal((html.match(/role="switch"/g) || []).length, 6)
-    assert.equal((html.match(/<input type="checkbox" role="switch" checked=""/g) || []).length, 4)
+    assert.equal((html.match(/role="switch"/g) || []).length, 7)
+    assert.equal((html.match(/<input type="checkbox" role="switch" checked=""/g) || []).length, 5)
     assert.match(html, /Character and speech bubbles/)
+    assert.match(html, /Show character on mobile/)
     assert.match(html, /Intro on startup/)
     assert.match(html, /App shortcut icon/)
     assert.match(html, /Pastel theme/)
@@ -663,7 +664,7 @@ test('settings page shows the update section and still works without the plugin 
     const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
     assert.match(html, /aria-label="Updates"/)
     assert.match(html, /Plugin manager is unavailable/)
-    assert.equal((html.match(/role="switch"/g) || []).length, 6)
+    assert.equal((html.match(/role="switch"/g) || []).length, 7)
     ctx.dispose()
   } finally { h.dom.window.close() }
 })
@@ -768,7 +769,7 @@ test('settings page shows the voice section without needing a YAML edit', () => 
     assert.match(html, /AI-generated voice/)
     assert.match(html, /credential store is unavailable/)
     assert.match(html, /type="password"/)
-    assert.equal((html.match(/role="switch"/g) || []).length, 6, 'feature, intro, icon and sleep switches are present')
+    assert.equal((html.match(/role="switch"/g) || []).length, 7, 'feature, mobile, intro, icon and sleep switches are present')
     ctx.dispose()
   } finally { h.dom.window.close() }
 })

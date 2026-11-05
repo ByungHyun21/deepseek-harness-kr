@@ -64,6 +64,8 @@ export const Config = z.object({
   tts: TtsConfig,
   // 시작할 때 가운데에서 크게 인사하는 등장 연출 (끄면 처음부터 제자리에 뜬다)
   intro: z.boolean().default(true).volatile(),
+  // 모바일(터치 전용) 화면에서도 캐릭터를 보여 줄지 (기본 표시)
+  mobileCharacter: z.boolean().default(true).volatile(),
   // 앱 바로가기 아이콘을 DeepSeek짱 아이콘으로 (Windows만, 창·작업 표시줄 아이콘은 해당 없음)
   appIcon: z.boolean().default(true).volatile(),
   // 절전: 입력이 없으면 캐릭터가 화면 밖으로 나가 렌더링을 멈춤
