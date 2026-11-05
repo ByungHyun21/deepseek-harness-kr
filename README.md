@@ -140,6 +140,13 @@ npm test
 캐릭터 코드·번역·자산을 수정한 뒤에는 `npm run build`를 실행하고 생성물도 함께 커밋하세요.
 사용자에게 나가는 변경이면 `package.json`의 `version`도 올려 주세요. Plugins 화면의 버전 표시로 새 버전인지 구분할 수 있습니다.
 
+### 확인 루프 (DSH 재시작 없이)
+
+- **클라이언트 코드·CSS·캐릭터 코드** (`lib/client.js`·`assets/`): `npm run build` 후 열려 있는 DSH 화면을 새로고침(Cmd/Ctrl+R)하면 새 번들이 적용됩니다. 클라이언트 모듈 주소의 `rev`가 파일 내용에서 만들어지므로 DSH를 재시작할 필요가 없습니다.
+- **호스트 코드** (`plugin/host.js`·`plugin/pet-host.js`·`plugins/dsh-tts/src/`): DSH 프로세스 안에서 도는 코드라 재시작해야 반영됩니다.
+- **바깥 펫 창**: `assets/dsc.js`가 바뀌면 창이 숨겨져 있을 때 새 코드로 다시 불러옵니다(`pet/main.cjs`). 창을 숨겼다 다시 열면 반영됩니다.
+- **작업 트리(worktree)에서 확인**: 프로필이 저장소를 `link:`로 가리키는 개발 환경이라면, 프로필의 `node_modules/deepseek-harness-kr` 링크를 그 작업 트리로 바꾸고 DSH를 한 번 재시작한 뒤 위 방법으로 확인합니다.
+
 ## 말풍선 음성 (TTS, 옵트인)
 
 0.1.6부터 말풍선 음성(`plugins/dsh-tts`)이 이 플러그인에 포함됩니다. 따로 설치할 것 없이 설정 창의 **말풍선 음성** 칸에서 켜고 설정합니다. YAML을 고칠 필요는 없습니다.
