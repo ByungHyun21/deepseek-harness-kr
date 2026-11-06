@@ -98,7 +98,7 @@ test('sleep preserves free placement, blocks dragging and never sleeps while the
     let now = 0, stopped = false, listeners = 0
     const frames = [], timers = [], lines = []
     const context = vm.createContext({
-      PET: petPage, innerWidth: 1000, innerHeight: 800, W: 200, H: 400, SHOW_K: 0.1, visH: 400, MIN_SHOW_K: 0.18, coarsePointer: () => false,
+      PET: petPage, innerWidth: 1000, innerHeight: 800, W: 200, H: 400, SHOW_K: 0.1, visH: 400, MIN_SHOW_K: 0.18, coarsePointer: () => false, freeMode: () => 'desktop',
       performance: { now: () => now }, requestAnimationFrame: (fn) => frames.push(fn),
       setTimeout: (fn) => { timers.push(fn); return timers.length }, clearTimeout() {},
       addEventListener() { listeners++ },
