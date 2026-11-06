@@ -366,6 +366,8 @@
       const free = { on: false, x: 0, y: 0, k: 1, anim: null, mode: null, applied: true };
       const drag = { pending: null, on: false, x: 0, y: 0, samples: [] };
       let chord = { at: null, button: null, valid: false };   // 좌우 버튼 코드(첫 버튼 누른 시각) — 150ms grace 판정용
+      let rightPress = null;   // 마우스 오른쪽 첫 버튼 { at, hit, id } — pointerdown/pointermove/mousedown 공용
+      let mouseButtons = 0;    // 마지막 포인터 이벤트의 buttons&3 (두 번째 버튼 합류 감지)
       const carry = { vx: 0, vy: 0 };              // 끄는 속도(px/초) → 몸이 관성으로 쏠리고 머리카락·치마가 흔들림
       const shown = { k: 1, x: 0, y: 0 };          // 지난 프레임에 그린 자리 (끌기 시작점)
       let touchHold = 0;   // 터치에서 길게 눌러 집기 모드로 들어가는 타이머 (오른쪽 버튼이 없는 화면용)
@@ -2137,23 +2139,60 @@
         return now >= chord.at && now - chord.at <= graceMs;
       };
       const chordUp = (chord, buttons) => ((buttons & 3) === 0 ? { at: null, button: null, valid: false } : chord);
+      // 두 번째 버튼이 합류할 때: 그 사이 예약된 쓰다듬기·가슴 끌기를 버리고 집기 예약을 되살린다.
+      // (pointerdown은 첫 버튼에만 오므로, 두 번째 버튼은 mousedown/pointermove에서 이 함수를 부른다.)
+      const armChordGrab = (e, now, pointerId = e.pointerId) => {
+        if (chestDragging) { clearInterval(chestLongTimer); chestDragging = false; chestTarget = 0; chestShiftTarget = 0; }
+        strokeFrom = null; chestFrom = null;
+        if (!drag.pending) {
+          const [px, py] = pt(e);
+          drag.pending = { id: pointerId, sx: px, sy: py, h: null, ox: px - shown.x, oy: py - shown.y };
+        }
+        chord.valid = true;
+        if (PET) PET.press(true);
+        try { e.preventDefault(); e.stopPropagation(); } catch {}
+        swallowClick = true;
+      };
+      // 오른쪽 첫 버튼이 캐릭터 위에서 유효하게 시작했는지 (왼쪽 pointerdown과 같은 가드).
+      const rightStart = (e, id = e.pointerId ?? rightPress?.id) => {
+        if (PET && petPanelOpen && petPanel && petPanel.contains(e.target)) return null;
+        if (walking()) return null;
+        if (intro.phase !== "done" || fleeX !== 0 || link.opening) return null;
+        const h = hitAt(e.clientX, e.clientY);
+        if (!h && !(PET && overBody(e.clientX, e.clientY))) return null;
+        return { at: performance.now(), hit: true, id };
+      };
+      // pointermove의 buttons 변화로 두 번째 버튼 합류를 감지한다. pointerdown은 첫 버튼만 오고,
+      // 왼쪽 pointerdown의 preventDefault가 compatibility mousedown을 막을 수 있어 이 경로가 기준이다.
+      const chordButtonsMoved = (e, now) => {
+        const mask = e.buttons & 3, prev = mouseButtons;
+        mouseButtons = mask;
+        if (mask !== 3 || prev === 3) return false;
+        if (prev === 2) {   // 오른쪽 먼저: 유효한 right start일 때만
+          if (!rightPress?.hit) return false;
+          armChordGrab(e, now, rightPress.id ?? e.pointerId);
+          return true;
+        }
+        if (prev === 1) {   // 왼쪽 먼저: 150ms grace
+          if (!chordWithinGrace(chord, 2, mask, now)) return false;
+          armChordGrab(e, now, drag.pending?.id ?? e.pointerId);
+          return true;
+        }
+        return false;
+      };
       document.addEventListener("pointerdown", (e) => {
         if (hidden) return;
         const nowDown = performance.now();
+        mouseButtons = e.buttons & 3;
         chord = chordDown(chord, e.button, e.buttons, nowDown);
         if (e.button !== 0) {
+          if (e.button === 2) {
+            rightPress = rightStart(e);
+            if ((e.buttons & 3) === 3 && rightPress) armChordGrab(e, nowDown, e.pointerId);
+          }
           // 오른쪽 버튼이 왼쪽을 누른 채 150ms 안에 눌리면, 그 사이 예약된 쓰다듬기·가슴 끌기를 버리고
           // 집기 예약을 되살린다. (두 버튼을 함께 오래 누르는 기존 동작은 아래 pointermove의 both 판정이 처리한다.)
-          if ((e.buttons & 1) && chordWithinGrace(chord, e.button, e.buttons, nowDown)) {
-            // 가슴 끌기/쓰다듬기 예약은 조용히 버린다 (대사·가슴 반응 없이 grab이 이어받게).
-            if (chestDragging) { clearInterval(chestLongTimer); chestDragging = false; chestTarget = 0; chestShiftTarget = 0; }
-            strokeFrom = null; chestFrom = null;
-            if (!drag.pending || drag.pending.id !== e.pointerId) {
-              const [px, py] = pt(e);
-              drag.pending = { id: e.pointerId, sx: px, sy: py, h: null, ox: px - shown.x, oy: py - shown.y };
-            }
-            chord.valid = true;
-          }
+          if ((e.buttons & 1) && chordWithinGrace(chord, e.button, e.buttons, nowDown)) armChordGrab(e, nowDown);
           return;   // 오른쪽 버튼 단독으로는 다른 동작 없음
         }
         if (chestFrom) { e.preventDefault(); e.stopPropagation(); swallowClick = true; return; }
@@ -2185,6 +2224,31 @@
         if (link.supported && link.petState === "none") linkPost("warm");   // 끌 수도 있으니 누르는 순간 펫 창을 숨긴 채 미리 띄움
         else if (!PET && link.petState === "shown" && !link.open && !link.follow) linkPost("hide");   // 붙은 직후 아직 남은 펫 창이 있으면 바로 숨김
       }, true);
+      // 마우스 좌우 버튼 코드 보완: Pointer Events는 첫 버튼에만 pointerdown을 준다.
+      //  · 우→좌: 오른쪽으로 시작했으면 pending이 없으므로, 왼쪽이 합류하는 mousedown에서 예약을 만든다.
+      //  · 좌→우: 두 번째 오른쪽은 pointerdown이 없으므로, 같은 grace를 mousedown에서도 처리한다.
+      //  · 오른쪽 단독 클릭은 여기서 pending을 만들지 않아 우클릭 메뉴·빈 곳 클릭이 그대로 동작한다.
+      document.addEventListener("mousedown", (e) => {
+        if (hidden) return;
+        const now = performance.now();
+        if (e.button === 2) {
+          if (!(e.buttons & 1)) rightPress = rightStart(e);
+          if ((e.buttons & 1) && chordWithinGrace(chord, 2, e.buttons, now)) armChordGrab(e, now, rightPress?.id ?? e.pointerId);
+          return;
+        }
+        if (e.button !== 0) return;
+        // 우→좌: 첫 오른쪽이 캐릭터 위였고 왼쪽이 아직 pending을 만들지 않았으면 여기서 만든다.
+        if ((e.buttons & 2) && rightPress?.hit && Number.isFinite(rightPress.id) && !drag.pending && !drag.on) {
+          chord = chordDown(chord, 0, e.buttons, now);   // 첫 버튼(오른쪽) 시각 유지
+          const [px, py] = pt(e);
+          drag.pending = { id: rightPress.id, sx: px, sy: py, h: null, ox: px - shown.x, oy: py - shown.y };
+          chord.valid = true;
+          if (PET) PET.press(true);
+          try { e.preventDefault(); e.stopPropagation(); } catch {}
+          swallowClick = true;
+        }
+      }, true);
+      document.addEventListener("mouseup", (e) => { if (e.button === 2) rightPress = null; }, true);
       // 빠르면 냄비, 느리면 세숫대야 (확실히 빠르게 쓸어야 냄비, 짧고 조금 비스듬해도 세숫대야)
       const strokeKind = (st, e) => {
         const dy = e.clientY - st.y, dx = Math.abs(e.clientX - st.x);
@@ -2243,6 +2307,7 @@
       document.addEventListener("pointermove", (e) => {
         if (hidden) return;
         if (PET && petPanelOpen && petPanel && petPanel.contains(e.target)) return;   // 패널 안 조작은 캐릭터 끌기로 이어지지 않음
+        if (e.pointerType !== "touch") chordButtonsMoved(e, performance.now());   // 두 번째 마우스 버튼 합류 (pointerdown preventDefault와 무관)
         // 터치: 가로로 끌면 길게 누르기를 기다리지 않고 바로 집기, 세로로 움직이면 쓰다듬기로 남긴다.
         if (e.pointerType === "touch" && drag.pending && !drag.pending.touchGrab && !drag.pending.touchStroke && e.pointerId === drag.pending.id) {
           const dx = e.clientX - drag.pending.sx, dy = e.clientY - drag.pending.sy;
@@ -2371,6 +2436,7 @@
       };
       document.addEventListener("pointerup", (e) => {
         if (hidden) return;
+        mouseButtons = e.buttons & 3;
         chord = chordUp(chord, e.buttons);
         if (chestFrom && e.pointerId === chestFrom.id) {
           const dragged = chestDragging;
@@ -2381,9 +2447,9 @@
         if (drag.pending) return endDrag(e, false);
         if (st) onTouch(st.h[0], st.h[1], st.h[2]);   // 쓸어내리지 않고 떼면 원래 머리 터치 반응
       }, true);
-      addEventListener("blur", () => { chord = chordUp(chord, 0); releaseChest(); if (drag.pending) endDrag({ pointerId: drag.pending.id }, !drag.on); });   // 창 포커스를 잃으면 끄기를 끝냄
+      addEventListener("blur", () => { mouseButtons = 0; chord = chordUp(chord, 0); rightPress = null; releaseChest(); if (drag.pending) endDrag({ pointerId: drag.pending.id }, !drag.on); });   // 창 포커스를 잃으면 끄기를 끝냄
       document.addEventListener("pointercancel", (e) => {
-        chord = chordUp(chord, e.buttons);
+        mouseButtons = 0; chord = chordUp(chord, e.buttons); rightPress = null;
         if (chestFrom && e.pointerId === chestFrom.id) { const d = chestDragging; releaseChest(); if (d && PET) PET.press(false); }
         endDrag(e, true);
       }, true);
