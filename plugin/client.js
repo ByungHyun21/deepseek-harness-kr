@@ -21,6 +21,9 @@ const sleepMinutes = (value) => {
 // ---------- 단축키 ----------
 // 설정 칸을 눌러 원하는 키 조합을 그대로 눌러 등록하고, 실제 입력도 같은 규칙으로 해석한다.
 const SHORTCUT_HINT_ID = 'deepseek-harness-kr-shortcut-hint'
+const PET_SHORTCUT_HINT_ID = 'deepseek-harness-kr-pet-shortcut-hint'
+const DRAG_HINT_ID = 'deepseek-harness-kr-drag-hint'
+const CANVAS_HINT_ID = 'deepseek-harness-kr-canvas-hint'
 const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta', 'AltGraph', 'CapsLock'])
 const MODIFIER_ALIASES = new Map([
   ['ctrl', 'ctrl'], ['control', 'ctrl'],
@@ -82,6 +85,23 @@ function shortcutKeyDown(event) {
   if (event.key === 'Backspace' || event.key === 'Delete') return { action: 'clear' }
   const combo = shortcutFromEvent(event)
   return combo ? { action: 'save', combo } : { action: 'wait', held: heldModifiers(event) }
+}
+
+// 이동 키는 단일 키만 쓴다: 수식 키 하나는 떼는 순간(wait → keyup에서 저장), 그 밖의 키 하나는 누르는 순간 저장.
+const MODIFIER_LABELS = new Map([['Control', 'Ctrl'], ['Alt', 'Alt'], ['Shift', 'Shift'], ['Meta', isMacPlatform() ? 'Cmd' : 'Meta']])
+const DRAG_KEY_LABELS = new Map([[' ', 'Space'], ['+', 'Plus']])
+function dragKeyDown(event) {
+  if (event.key === 'Tab') return { action: 'leave' }
+  if (event.key === 'Escape') return { action: 'cancel' }
+  if (event.key === 'Backspace' || event.key === 'Delete') return { action: 'clear' }
+  const modifier = MODIFIER_LABELS.get(event.key)
+  if (modifier) return { action: 'wait', held: modifier }
+  // 수식 키와 다른 키를 함께 누르면(조합) 이동 키로 쓰지 않는다 — 수식 키 하나만 떼어 저장하게 둔다
+  if (event.ctrlKey || event.altKey || event.shiftKey || event.metaKey) return { action: 'wait', held: heldModifiers(event) }
+  const key = String(event.key ?? '')
+  if (!key) return { action: 'wait', held: '' }
+  const label = DRAG_KEY_LABELS.get(key) ?? (key.length === 1 ? key.toUpperCase() : key)
+  return { action: 'save', key: label }
 }
 
 function createLifetime() {
@@ -199,6 +219,10 @@ function startCharacter(life) {
   stylesheet(life, 'character.css')
   // 캐릭터를 끄거나 플러그인이 내려가면 바깥 펫 창도 숨김 (이 화면에서 펫 창을 쓴 적이 있을 때만)
   life.add(() => {
+    delete window.__dscPetToggle
+    delete window.__dscCanvasToggle
+    delete window.__dscCanvasHidden
+    document.getElementById('dsc-hide-chip')?.remove()
     if (!window.__dscPetUsed) return
     delete window.__dscPetUsed
     try { window.fetch(PET_ROOT + 'hide', { method: 'POST', keepalive: true }).catch(() => {}) } catch {}
@@ -567,6 +591,99 @@ function updateSection(updater, ko) {
         ? button(t('다시 확인', 'Check again'), () => updater.check(), busy) : null))
 }
 
+// 단축키 입력 칸: 칸을 눌러 두면 누른 키 조합을 그대로 저장한다. Esc 취소 · Backspace/Delete 지우기 · Tab은 포커스 이동.
+function ShortcutField({ label, control, hintId, hint, value, placeholder, ariaLabel, ko, disabled, inactive, onChange }) {
+  const [recording, setRecording] = React.useState(false)
+  const [held, setHeld] = React.useState('')
+  const capture = (event) => {
+    const action = shortcutKeyDown(event)
+    const stop = () => { setRecording(false); setHeld('') }
+    if (action.action === 'leave') { stop(); return }
+    event.preventDefault()
+    event.stopPropagation()
+    const target = event.currentTarget
+    if (action.action === 'cancel') { stop(); target.blur(); return }
+    if (action.action === 'clear') { stop(); void onChange(''); target.blur(); return }
+    if (action.action === 'wait') { setHeld(action.held); return }
+    stop(); void onChange(action.combo); target.blur()
+  }
+  return React.createElement(React.Fragment, null,
+    React.createElement(control ? 'div' : 'label', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 24, rowGap: 8 } },
+      React.createElement('span', { style: { opacity: inactive ? 0.55 : 1 } }, label),
+      React.createElement('span', { style: { display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' } },
+        control ?? null,
+        React.createElement('input', {
+          type: 'text',
+          readOnly: true,
+          'aria-label': ariaLabel,
+          'aria-describedby': hintId,
+          placeholder: recording ? (ko ? '키를 누르세요…' : 'Press keys…') : placeholder,
+          style: { width: 150, cursor: disabled ? 'default' : 'pointer', textAlign: 'center', borderColor: recording ? '#7aa7ff' : undefined, opacity: inactive ? 0.45 : 1 },
+          value: recording ? held : (value ?? ''),
+          disabled,
+          onFocus: () => { if (disabled) return; setRecording(true); setHeld('') },
+          onBlur: () => { setRecording(false); setHeld('') },
+          onKeyDown: capture,
+        }))),
+    hint ? React.createElement('p', { id: hintId, style: { margin: 0, opacity: inactive ? 0.45 : 0.7 } }, hint) : null)
+}
+
+// 이동 키 입력 칸: 수식 키 하나 또는 일반 키 하나를 그대로 등록한다. Esc 취소 · Backspace/Delete 지우기 · Tab은 포커스 이동.
+function DragKeyField({ label, hintId, hint, value, ariaLabel, ko, disabled, inactive, onChange }) {
+  const [recording, setRecording] = React.useState(false)
+  const [held, setHeld] = React.useState('')
+  const stop = () => { setRecording(false); setHeld('') }
+  const capture = (event) => {
+    const action = dragKeyDown(event)
+    if (action.action === 'leave') { stop(); return }
+    event.preventDefault()
+    event.stopPropagation()
+    const target = event.currentTarget
+    if (action.action === 'cancel') { stop(); target.blur(); return }
+    if (action.action === 'clear') { stop(); void onChange(''); target.blur(); return }
+    if (action.action === 'wait') { setHeld(action.held); return }
+    stop(); void onChange(action.key); target.blur()
+  }
+  const release = (event) => {   // 수식 키는 떼는 순간 저장 (다른 키와 조합하지 않는 단일 키)
+    const modifier = MODIFIER_LABELS.get(event.key)
+    if (!modifier || !recording) return
+    stop(); void onChange(modifier); event.currentTarget.blur()
+  }
+  return React.createElement(React.Fragment, null,
+    React.createElement('label', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 24, rowGap: 8 } },
+      React.createElement('span', { style: { opacity: inactive ? 0.55 : 1 } }, label),
+      React.createElement('input', {
+        type: 'text',
+        readOnly: true,
+        'aria-label': ariaLabel,
+        'aria-describedby': hintId,
+        placeholder: recording ? (ko ? '키를 누르세요…' : 'Press a key…') : '',
+        style: { width: 150, cursor: disabled ? 'default' : 'pointer', textAlign: 'center', borderColor: recording ? '#7aa7ff' : undefined, opacity: inactive ? 0.45 : 1 },
+        value: recording ? held : (value ?? ''),
+        disabled,
+        onFocus: () => { if (disabled) return; setRecording(true); setHeld('') },
+        onBlur: () => { setRecording(false); setHeld('') },
+        onKeyDown: capture,
+        onKeyUp: release,
+      })),
+    React.createElement('p', { id: hintId, style: { margin: 0, opacity: inactive ? 0.45 : 0.7 } }, hint))
+}
+
+// 캔버스만 숨김 상태를 설정 화면에도 보여 준다 — 설정(캐릭터와 말풍선)이 꺼진 것과 혼동하지 않게.
+function CanvasHiddenNotice({ ko }) {
+  const read = () => (typeof window !== 'undefined' && window.__dscCanvasHidden?.() === true)
+  const [hidden, setHidden] = React.useState(read)
+  React.useEffect(() => {
+    const id = setInterval(() => setHidden(read()), 600)
+    return () => clearInterval(id)
+  }, [])
+  if (!hidden) return null
+  return React.createElement('div', { role: 'status', style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, opacity: 0.9 } },
+    React.createElement('span', null, ko ? '지금 캔버스가 숨겨져 있습니다(캐릭터 설정은 켜져 있음).' : 'The canvas is hidden right now (the character setting is still on).'),
+    React.createElement('button', { type: 'button', onClick: () => { try { window.__dscCanvasToggle?.() } catch {} setHidden(false) } },
+      ko ? '다시 표시' : 'Show again'))
+}
+
 function settingsPage(ctx, form, updater, keys) {
   return function FeatureSettings({ view }) {
     const state = React.useSyncExternalStore((fn) => form.subscribe(fn), () => form.getSnapshot(), () => form.getSnapshot())
@@ -574,14 +691,11 @@ function settingsPage(ctx, form, updater, keys) {
     React.useSyncExternalStore((fn) => updater.subscribe(fn), () => updater.getSnapshot(), () => updater.getSnapshot())
     const [error, setError] = React.useState('')
     const [pending, setPending] = React.useState(false)
-    const [recordingShortcut, setRecordingShortcut] = React.useState(false)
-    const [heldShortcut, setHeldShortcut] = React.useState('')
     const ko = locale.active.toLowerCase().startsWith('ko')
     if (view === 'summary') return React.createElement('span', null, ko ? '캐릭터 · 테마 · 한국어' : 'Character · Theme · Korean')
     if (state.status !== 'ready') return React.createElement('p', { role: 'status' }, ko ? '설정을 불러오는 중입니다.' : 'Loading settings…')
     const fields = [
       ['character', ko ? '캐릭터와 말풍선' : 'Character and speech bubbles'],
-      ['mobileCharacter', ko ? '모바일에서도 캐릭터 표시' : 'Show character on mobile'],
       ['intro', ko ? '시작할 때 등장 연출' : 'Intro on startup'],
       ['appIcon', ko ? '앱 바로가기 아이콘 (Windows)' : 'App shortcut icon (Windows)'],
       ['theme', ko ? '파스텔 테마' : 'Pastel theme'],
@@ -603,19 +717,11 @@ function settingsPage(ctx, form, updater, keys) {
       React.createElement('input', { type: 'checkbox', checked: state.value?.[field] === true, disabled: off, onChange: (event) => change(field, event.target.checked) }))
     const bodyType = state.value?.bodyType || 'default'
     const shortcutValue = state.value?.characterToggleKey ?? 'Ctrl+Shift+D'
-    // 칸을 눌러 켜 두면, 누른 키를 그대로 단축키로 저장한다. Esc 취소 · Backspace/Delete 지우기.
-    const captureShortcut = (event) => {
-      const action = shortcutKeyDown(event)
-      const stopRecording = () => { setRecordingShortcut(false); setHeldShortcut('') }
-      if (action.action === 'leave') { stopRecording(); return }
-      event.preventDefault()
-      event.stopPropagation()
-      const target = event.currentTarget
-      if (action.action === 'cancel') { stopRecording(); target.blur(); return }
-      if (action.action === 'clear') { stopRecording(); void change('characterToggleKey', ''); target.blur(); return }
-      if (action.action === 'wait') { setHeldShortcut(action.held); return }
-      stopRecording(); void change('characterToggleKey', action.combo); target.blur()
-    }
+    const petShortcutValue = state.value?.petToggleKey ?? 'Ctrl+Shift+P'
+    const characterOn = state.value?.character !== false
+    const canvasToggle = state.value?.canvasToggle === true
+    const canvasKeyValue = state.value?.canvasToggleKey ?? 'Ctrl+Shift+H'
+    const dragKey = state.value?.dragKey || 'Alt'
     return React.createElement('div', { style: { display: 'grid', gap: 16 } },
       ...fields.map(([field, label]) => React.createElement('label', { key: field, style: row },
         React.createElement('span', null, label),
@@ -637,26 +743,69 @@ function settingsPage(ctx, form, updater, keys) {
         React.createElement('label', { style: row },
           React.createElement('span', null, ko ? '쉬기 전 대기 시간 (분)' : 'Idle minutes before resting'),
           React.createElement('input', { type: 'number', min: 0.5, max: 60, step: 0.5, style: { width: 90 }, value: sleepMinutes(state.value?.idleSleepMinutes), disabled: off, onChange: (event) => change('idleSleepMinutes', sleepMinutes(event.target.value)) }))),
-      React.createElement('section', { 'aria-label': ko ? '단축키' : 'Shortcut', style: { display: 'grid', gap: 10, borderTop: '1px solid rgba(127,127,127,.25)', paddingTop: 14 } },
-        React.createElement('strong', null, ko ? '단축키' : 'Shortcut'),
-        React.createElement('label', { style: row },
-          React.createElement('span', null, ko ? '캐릭터 토글 단축키 (비우면 사용 안 함)' : 'Toggle character shortcut (empty to disable)'),
-          React.createElement('input', {
-            type: 'text',
-            readOnly: true,
-            'aria-label': ko ? '캐릭터 토글 단축키 입력' : 'Record toggle character shortcut',
-            'aria-describedby': SHORTCUT_HINT_ID,
-            placeholder: recordingShortcut ? (ko ? '키를 누르세요…' : 'Press keys…') : 'Ctrl+Shift+D',
-            style: { width: 150, cursor: 'pointer', textAlign: 'center', borderColor: recordingShortcut ? '#7aa7ff' : undefined },
-            value: recordingShortcut ? heldShortcut : shortcutValue,
-            disabled: off,
-            onFocus: () => { if (off) return; setRecordingShortcut(true); setHeldShortcut('') },
-            onBlur: () => { setRecordingShortcut(false); setHeldShortcut('') },
-            onKeyDown: captureShortcut,
-          })),
+      React.createElement('section', { 'aria-label': ko ? '단축키 - 캐릭터와 말풍선' : 'Shortcuts - Character and speech bubbles', style: { display: 'grid', gap: 10, borderTop: '1px solid rgba(127,127,127,.25)', paddingTop: 14 } },
+        React.createElement('strong', null, ko ? '단축키 - 캐릭터와 말풍선' : 'Shortcuts - Character and speech bubbles'),
         React.createElement('p', { id: SHORTCUT_HINT_ID, style: { margin: 0, opacity: 0.7 } },
           ko ? '칸을 누른 뒤 원하는 키 조합을 그대로 누르면 등록됩니다. Esc 취소, Backspace로 지우기'
-            : 'Click the field, then press the keys you want. Esc cancels, Backspace clears.')),
+            : 'Click the field, then press the keys you want. Esc cancels, Backspace clears.'),
+        React.createElement(ShortcutField, {
+          label: ko ? '캐릭터와 말풍선 설정 토글 단축키 (비우면 사용 안 함)' : 'Character and speech bubbles setting toggle shortcut (empty to disable)',
+          hintId: SHORTCUT_HINT_ID,
+          hint: characterOn ? '' : (ko ? '캐릭터와 말풍선이 꺼져 있어도 이 단축키로 다시 켤 수 있습니다.' : 'This shortcut still turns the character back on while it is off.'),
+          value: shortcutValue,
+          placeholder: 'Ctrl+Shift+D',
+          ariaLabel: ko ? '캐릭터와 말풍선 설정 토글 단축키 입력' : 'Record character and speech bubbles toggle shortcut',
+          ko, disabled: off,
+          onChange: (combo) => change('characterToggleKey', combo),
+        }),
+        React.createElement(DragKeyField, {
+          label: ko ? '캐릭터 이동 키 (누른 채 끌기)' : 'Move character key (hold while dragging)',
+          hintId: DRAG_HINT_ID,
+          hint: !characterOn
+            ? (ko ? '캐릭터와 말풍선이 꺼져 있을 때는 사용할 수 없습니다.' : 'Unavailable while the character and speech bubbles are off.')
+            : (ko ? '캐릭터를 집어 옮길 때 누르고 있어야 하는 키입니다. 수식 키(Alt·Ctrl·Shift·Cmd) 하나 또는 일반 키 하나를 등록합니다. 비우면 좌우 버튼을 함께 눌러야 합니다.'
+              : 'Hold this key while dragging to move the character. Record one modifier (Alt, Ctrl, Shift, Cmd) or one other key. Empty needs both buttons.'),
+          value: dragKey,
+          ariaLabel: ko ? '캐릭터 이동 키 입력' : 'Record drag key',
+          ko, disabled: off || !characterOn, inactive: !characterOn,
+          onChange: (key) => change('dragKey', key),
+        }),
+        // 캔버스만 숨김/표시: 캐릭터 설정을 끄는 것이 아니라 그리기만 멈춘다. 스위치를 단축키 칸 바로 왼쪽에 둔다.
+        React.createElement(ShortcutField, {
+          label: ko ? '캔버스만 숨김/표시 단축키 (비우면 사용 안 함)' : 'Hide/show canvas shortcut (empty to disable)',
+          control: React.createElement('input', {
+            type: 'checkbox', role: 'switch',
+            'aria-label': ko ? '캔버스만 숨김/표시 사용' : 'Enable canvas hide/show',
+            checked: canvasToggle,
+            disabled: off || !characterOn,
+            onChange: (event) => change('canvasToggle', event.target.checked),
+          }),
+          hintId: CANVAS_HINT_ID,
+          hint: !characterOn
+            ? (ko ? '캐릭터와 말풍선이 꺼져 있을 때는 사용할 수 없습니다. 캐릭터를 켜면 다시 쓸 수 있습니다.'
+              : 'Unavailable while the character and speech bubbles are off. Turn the character on to use it again.')
+            : (ko ? '왼쪽 스위치는 이 단축키를 켜고 끕니다. 단축키는 캐릭터와 말풍선 설정을 끄는 것이 아니라, 캔버스만 잠시 숨기고 다시 표시합니다(그리기만 멈춤).'
+              : 'The switch enables this shortcut. The shortcut does not turn the character or speech-bubble setting off; it only hides and shows the canvas by pausing drawing.'),
+          value: canvasKeyValue,
+          placeholder: 'Ctrl+Shift+H',
+          ariaLabel: ko ? '캔버스 숨김/표시 단축키 입력' : 'Record canvas hide/show shortcut',
+          ko, disabled: off || !canvasToggle || !characterOn, inactive: !canvasToggle || !characterOn,
+          onChange: (combo) => change('canvasToggleKey', combo),
+        }),
+        React.createElement(CanvasHiddenNotice, { ko }),
+        React.createElement(ShortcutField, {
+          label: ko ? '펫 창 내보내기·돌아오기 단축키 (비우면 사용 안 함)' : 'Pet window shortcut (empty to disable)',
+          hintId: PET_SHORTCUT_HINT_ID,
+          hint: !characterOn
+            ? (ko ? '캐릭터와 말풍선이 꺼져 있을 때는 사용할 수 없습니다.' : 'Unavailable while the character and speech bubbles are off.')
+            : (ko ? '캐릭터를 바깥 펫 창으로 내보내고 다시 불러옵니다.'
+              : 'Moves the character out to the pet window and back.'),
+          value: petShortcutValue,
+          placeholder: 'Ctrl+Shift+P',
+          ariaLabel: ko ? '펫 창 단축키 입력' : 'Record pet window shortcut',
+          ko, disabled: off || !characterOn, inactive: !characterOn,
+          onChange: (combo) => change('petToggleKey', combo),
+        })),
       error ? React.createElement('p', { role: 'alert' }, error) : null,
       React.createElement(TtsSection, { form, keys, ko, writable: state.writable, tts: state.value?.tts }),
       updateSection(updater, ko))
@@ -740,13 +889,16 @@ function apply(ctx) {
       window.__dscSleep = { enabled: value.idleSleep !== false, minutes: sleepMinutes(value.idleSleepMinutes) }
       // 시작 등장 연출 여부: 캐릭터가 처음 뜰 때 읽는다 (끄면 가운데 인사 없이 바로 제자리에)
       window.__dscIntro = { enabled: value.intro !== false }
-      // 모바일(터치 전용) 화면에서 캐릭터를 숨길지: 캐릭터가 매 프레임 읽는다 (기본 표시)
-      window.__dscMobile = { enabled: value.mobileCharacter !== false }
+      // 캐릭터 이동 보조 키: 캐릭터가 포인터 이벤트마다 읽는다 (다시 띄우지 않음)
+      window.__dscDrag = { key: value.dragKey || 'Alt' }
+      // 캔버스 숨김 기능을 끄면 숨겨 둔 캔버스를 다시 표시 (기능을 되돌렸을 때)
+      if (value.canvasToggle !== true && window.__dscCanvasHidden?.() === true) window.__dscCanvasToggle?.()
     }
-    life.add(() => { delete window.__dscOutfit; delete window.__dscSleep; delete window.__dscIntro; delete window.__dscMobile })
+    life.add(() => { delete window.__dscOutfit; delete window.__dscSleep; delete window.__dscIntro; delete window.__dscDrag })
     life.add(form.subscribe(sync))
     // 단축키로 캐릭터 토글: 설정의 character 스위치를 뒤집는다 (설정 화면과 같은 저장소·같은 마운트/정리 경로)
-    let heldToggleKey = '', togglePending = false
+    // 키를 떼는 이벤트를 놓쳐도 다음 누름이 막히지 않도록, 누른 시각 기준으로만 연타를 막는다.
+    let lastToggleAt = -Infinity, togglePending = false
     const toggleListener = async (event) => {
       if (event.repeat) return
       const snapshot = form.getSnapshot()
@@ -757,8 +909,10 @@ function apply(ctx) {
       if (el && (el.isContentEditable || /^(input|textarea|select)$/i.test(el.tagName))) return
       if (!matchesShortcut(combo, event)) return
       event.preventDefault()
-      if (heldToggleKey || togglePending || snapshot.status !== 'ready' || !snapshot.writable) return
-      heldToggleKey = event.code || event.key.toLowerCase()
+      if (togglePending || snapshot.status !== 'ready' || !snapshot.writable) return
+      const now = Number(event.timeStamp) || performance.now()
+      if (now - lastToggleAt < 150) return
+      lastToggleAt = now
       togglePending = true
       try {
         if (!await form.set('character', snapshot.value?.character === false)) console.warn('캐릭터 설정 저장 실패')
@@ -766,10 +920,48 @@ function apply(ctx) {
       finally { togglePending = false }
     }
     life.listen(window, 'keydown', toggleListener)
-    life.listen(window, 'keyup', (event) => {
-      if ((event.code || event.key.toLowerCase()) === heldToggleKey) heldToggleKey = ''
-    })
-    life.listen(window, 'blur', () => { heldToggleKey = '' })
+    // 단축키로 바깥 펫 창으로 내보내기·돌아오기 (창 안 캐릭터가 노출한 토글을 부른다)
+    let lastPetToggleAt = -Infinity
+    const petToggleListener = (event) => {
+      if (event.repeat) return
+      const snapshot = form.getSnapshot()
+      const combo = snapshot.value?.petToggleKey ?? 'Ctrl+Shift+P'
+      const toggle = window.__dscPetToggle
+      if (!toggle || !parseShortcut(combo)) return
+      // 텍스트 입력 중엔 발동하지 않게 (글자를 지우는 Shift+화살표 같은 조합 보호)
+      const el = event.target
+      if (el && (el.isContentEditable || /^(input|textarea|select)$/i.test(el.tagName))) return
+      if (!matchesShortcut(combo, event)) return
+      event.preventDefault()
+      if (snapshot.status !== 'ready') return
+      const now = Number(event.timeStamp) || performance.now()
+      if (now - lastPetToggleAt < 150) return
+      lastPetToggleAt = now
+      try { toggle() } catch { console.warn('펫 창 토글 실패') }
+    }
+    life.listen(window, 'keydown', petToggleListener)
+    // 캔버스만 숨김/표시 단축키: 설정에서 켠 사람만 동작한다. 입력창에 포커스가 있어도 수식 키 조합이면 실행한다(글자를 쓰지 않음).
+    // 키를 떼는 이벤트(keyup)를 놓쳐도 다음 누름이 막히지 않도록, 누른 시각 기준으로만 연타를 막는다.
+    let lastCanvasToggleAt = -Infinity
+    const canvasToggleListener = (event) => {
+      if (event.repeat) return
+      const snapshot = form.getSnapshot()
+      if (snapshot.status !== 'ready' || snapshot.value?.canvasToggle !== true) return
+      const combo = snapshot.value?.canvasToggleKey ?? 'Ctrl+Shift+H'
+      const toggle = window.__dscCanvasToggle
+      const parsed = parseShortcut(combo)
+      if (!toggle || !parsed) return
+      if (!matchesShortcut(combo, event)) return
+      const el = event.target
+      const inInput = el && (el.isContentEditable || /^(input|textarea|select)$/i.test(el.tagName))
+      if (inInput && !(parsed.ctrl || parsed.alt || parsed.meta)) return
+      event.preventDefault()
+      const now = Number(event.timeStamp) || performance.now()
+      if (now - lastCanvasToggleAt < 150) return   // 같은 누름의 중복/아주 빠른 연타만 무시
+      lastCanvasToggleAt = now
+      try { toggle() } catch { console.warn('캔버스 숨김 토글 실패') }
+    }
+    life.listen(window, 'keydown', canvasToggleListener)
     life.add(ctx.slots.inject('plugins.row.config', () => ctx.slots.register({
       name: 'plugins.row.config', key: PLUGIN_ID + '#' + ENTRY_ID,
     }, settingsPage(ctx, form, updater, keys))))
@@ -780,4 +972,4 @@ function apply(ctx) {
 exports.inject = ['locale', 'theme', 'configForms', 'slots']
 exports.apply = apply
 // 테스트용
-exports.internals = { githubSource, compareVersions, createUpdater, createKeyStore, ttsSignature, parseJsonObject, parseShortcut, shortcutFromEvent, shortcutKeyDown, matchesShortcut }
+exports.internals = { githubSource, compareVersions, createUpdater, createKeyStore, ttsSignature, parseJsonObject, parseShortcut, shortcutFromEvent, shortcutKeyDown, dragKeyDown, matchesShortcut }

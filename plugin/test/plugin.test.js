@@ -52,7 +52,7 @@ test('sleep cancels departures, protects intro and wakes for waiting cards', asy
       setExp() {}, setMood() {}, play() {}, mutterCheck() {}, flashExp() {},
       TEXT: { approval: 'approval', question: 'question' },
     })
-    vm.runInContext('let fleeX = 0, running = false, waitingKind = null, lastSayAt = 0, lastError = 0;', context)
+    vm.runInContext('let fleeX = 0, hidden = false, running = false, waitingKind = null, lastSayAt = 0, lastError = 0;', context)
     vm.runInContext(code.slice(code.indexOf('      const WALK_SPEED'), code.indexOf('      const walkBack')), context)
     vm.runInContext(code.slice(code.indexOf('      const SLEEP ='), code.indexOf('      const onLower')), context)
     const pollStart = code.lastIndexOf('      setInterval(() => {')
@@ -98,18 +98,18 @@ test('sleep preserves free placement, blocks dragging and never sleeps while the
     let now = 0, stopped = false, listeners = 0
     const frames = [], timers = [], lines = []
     const context = vm.createContext({
-      PET: petPage, innerWidth: 1000, innerHeight: 800, W: 200, H: 400, SHOW_K: 0.1, visH: 400, MIN_SHOW_K: 0.18, coarsePointer: () => false, freeMode: () => 'desktop',
+      PET: petPage, innerWidth: 1000, innerHeight: 800, W: 200, H: 400, SHOW_K: 0.1, visH: 400,
       performance: { now: () => now }, requestAnimationFrame: (fn) => frames.push(fn),
       setTimeout: (fn) => { timers.push(fn); return timers.length }, clearTimeout() {},
       addEventListener() { listeners++ },
-      drag: {}, free: { on: true, k: 0.8, fx: 0.3, fy: 0.6, applied: true }, link: {},
+      drag: {}, free: { on: true, k: 0.8, fx: 0.3, fy: 0.6 }, link: {},
       walk: { phase: '', timers: [], slideId: 0 }, intro: { phase: 'done' },
       canvas: { style: {}, getBoundingClientRect: () => ({ left: 220 }) }, bubble: { style: {} },
       app: { ticker: { start() { stopped = false }, stop() { stopped = true } } },
       keepIn: (q) => q, speak: (line) => lines.push(line), hush() {}, place() {},
     })
     const run = (s) => vm.runInContext(s, context)
-    run('let fleeX = 0, running = false, waitingKind = null, snapP = 0;')
+    run('let fleeX = 0, hidden = false, running = false, waitingKind = null, snapP = 0;')
     run(code.slice(code.indexOf('      const WALK_SPEED'), code.indexOf('      const walkBack')))
     run(code.slice(code.indexOf('      const SLEEP ='), code.indexOf('      const onLower')))
     run(code.slice(code.indexOf('      const dockPose ='), code.indexOf('      const GLIDE =')))
@@ -207,7 +207,7 @@ function clientHarness(initial = {}, status = 'ready') {
   return { dom, client, ctx, languages, dictionaries, resolveModel, form, mutations, pages, get appCreated() { return appCreated }, get appDestroyed() { return appDestroyed }, get selected() { return selected } }
 }
 
-test('shortcut handles repeats, matching keyup, blur, permissions, failures and disposal', async () => {
+test('character shortcut debounces, guards permissions/failures and disposes', async () => {
   const h = clientHarness({ character: false, theme: false, translation: false })
   try {
     let calls = 0, mode = 'ok', writable = true
@@ -221,41 +221,36 @@ test('shortcut handles repeats, matching keyup, blur, permissions, failures and 
     let warnings = 0
     h.dom.window.console.warn = () => { warnings++ }
     const ctx = h.ctx(); h.client.apply(ctx)
-    const key = async (type = 'keydown', extra = {}, target = h.dom.window) => {
-      const event = new h.dom.window.KeyboardEvent(type, { key: 'D', code: 'KeyD', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true, ...extra })
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+    const key = async (extra = {}, target = h.dom.window) => {
+      const event = new h.dom.window.KeyboardEvent('keydown', { key: 'D', code: 'KeyD', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true, ...extra })
       target.dispatchEvent(event)
       await new Promise((resolve) => setImmediate(resolve))
       return event
     }
     assert.equal((await key()).defaultPrevented, true); assert.equal(calls, 1)
-    await key('keyup', { key: 'Shift', code: 'ShiftLeft' })
-    await key(); assert.equal(calls, 1)
-    await key('keyup')
-    await key('keydown', { repeat: true }); assert.equal(calls, 1)
-    await key(); assert.equal(calls, 2)
-    h.dom.window.dispatchEvent(new h.dom.window.Event('blur'))
-    await key(); assert.equal(calls, 3)
-    await key('keyup')
-    writable = false; await key(); assert.equal(calls, 3)
+    await key(); assert.equal(calls, 1)   // 150ms 안 연타는 무시
+    await key({ repeat: true }); assert.equal(calls, 1)
+    await wait(180); await key(); assert.equal(calls, 2)
+    writable = false; await wait(180); await key(); assert.equal(calls, 2)
     writable = true
-    h.form.update({}, 'loading'); await key(); assert.equal(calls, 3)
+    h.form.update({}, 'loading'); await wait(180); await key(); assert.equal(calls, 2)
     h.form.update({ character: false, theme: false, translation: false })
     const input = h.dom.window.document.createElement('input')
     h.dom.window.document.body.append(input)
-    await key('keydown', {}, input); assert.equal(calls, 3)
-    await key('keydown', { metaKey: true }); assert.equal(calls, 3)
-    for (mode of ['false', 'throw']) { await key(); await key('keyup') }
+    await wait(180); await key({}, input); assert.equal(calls, 2)   // 입력 중엔 무시
+    await key({ metaKey: true }); assert.equal(calls, 2)            // 다른 조합은 무시
+    for (mode of ['false', 'throw']) { await wait(180); await key() }
     assert.equal(warnings, 2)
     let resolveSave
     h.form.set = () => { calls++; return new Promise((resolve) => { resolveSave = resolve }) }
-    await key(); const pendingCalls = calls
-    await key('keyup'); await key(); assert.equal(calls, pendingCalls)
+    await wait(180); await key(); const pendingCalls = calls
+    await wait(180); await key(); assert.equal(calls, pendingCalls)   // 저장 중엔 무시
     resolveSave(true); await new Promise((resolve) => setImmediate(resolve))
-    await key(); assert.equal(calls, pendingCalls + 1)
+    await wait(180); await key(); assert.equal(calls, pendingCalls + 1)
     resolveSave(true); await new Promise((resolve) => setImmediate(resolve))
     ctx.dispose()
-    await key('keyup'); h.dom.window.dispatchEvent(new h.dom.window.Event('blur'))
-    await key(); assert.equal(calls, pendingCalls + 1)
+    await wait(180); await key(); assert.equal(calls, pendingCalls + 1)
     assert.equal(h.dom.window.__dscSleep, undefined)
   } finally { h.dom.window.close() }
 })
@@ -313,13 +308,196 @@ test('settings page records the shortcut by pressing keys instead of typing it',
     const ctx = h.ctx(); h.client.apply(ctx)
     const Page = h.pages.get(packageName + '#deepseek-harness-kr')
     const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
-    assert.match(html, /aria-label="Record toggle character shortcut"/)
+    assert.match(html, /aria-label="Record character and speech bubbles toggle shortcut"/)
+    assert.match(html, /Character and speech bubbles setting toggle shortcut/)
     assert.match(html, /readonly=""/)
     assert.match(html, /value="Ctrl\+Shift\+D"/)
     assert.match(html, /id="deepseek-harness-kr-shortcut-hint"/)
     assert.match(html, /Click the field, then press the keys you want/)
     ctx.dispose()
   } finally { h.dom.window.close() }
+})
+
+test('drag key, pet window shortcut and canvas toggle are configurable and defaulted', () => {
+  const defaults = readLive(Config({}))
+  assert.equal(defaults.dragKey, 'Alt')
+  assert.equal(defaults.petToggleKey, 'Ctrl+Shift+P')
+  assert.equal(defaults.canvasToggle, false)
+  assert.equal(defaults.canvasToggleKey, 'Ctrl+Shift+H')
+  const custom = readLive(Config({ dragKey: 'F', petToggleKey: '', canvasToggle: true, canvasToggleKey: 'H' }))
+  assert.equal(custom.dragKey, 'F')
+  assert.equal(custom.petToggleKey, '')
+  assert.equal(custom.canvasToggle, true)
+  assert.equal(custom.canvasToggleKey, 'H')
+})
+
+test('drag key recorder accepts one modifier or one ordinary key', () => {
+  const h = clientHarness()
+  try {
+    const { dragKeyDown } = h.client.internals
+    const action = (event) => ({ ...dragKeyDown(event) })
+    assert.deepEqual(action({ key: 'Tab' }), { action: 'leave' })
+    assert.deepEqual(action({ key: 'Escape' }), { action: 'cancel' })
+    assert.deepEqual(action({ key: 'Backspace' }), { action: 'clear' })
+    assert.deepEqual(action({ key: 'Delete' }), { action: 'clear' })
+    assert.deepEqual(action({ key: 'Control' }), { action: 'wait', held: 'Ctrl' })
+    assert.deepEqual(action({ key: 'Alt' }), { action: 'wait', held: 'Alt' })
+    assert.deepEqual(action({ key: 'f' }), { action: 'save', key: 'F' })
+    assert.deepEqual(action({ key: ' ' }), { action: 'save', key: 'Space' })
+    assert.deepEqual(action({ key: 'Enter' }), { action: 'save', key: 'Enter' })
+    assert.deepEqual(action({ key: 'c', ctrlKey: true }), { action: 'wait', held: 'Ctrl' })
+    assert.deepEqual(action({ key: 'f', shiftKey: true }), { action: 'wait', held: 'Shift' })
+  } finally { h.dom.window.close() }
+})
+
+test('settings page exposes the drag key and pet window shortcut', () => {
+  const h = clientHarness({ character: true, theme: false, translation: false, dragKey: 'Alt', petToggleKey: 'Ctrl+Shift+P' })
+  try {
+    const ctx = h.ctx(); h.client.apply(ctx)
+    const Page = h.pages.get(packageName + '#deepseek-harness-kr')
+    const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
+    assert.match(html, /Move character key \(hold while dragging\)/)
+    assert.match(html, /aria-label="Record drag key"/)
+    assert.match(html, /value="Alt"/)
+    assert.match(html, /id="deepseek-harness-kr-drag-hint"/)
+    assert.match(html, /aria-label="Record pet window shortcut"/)
+    assert.match(html, /value="Ctrl\+Shift\+P"/)
+    assert.match(html, /id="deepseek-harness-kr-pet-shortcut-hint"/)
+    assert.match(html, /aria-label="Enable canvas hide\/show"/)
+    assert.match(html, /Hide\/show canvas shortcut \(empty to disable\)/)
+    assert.match(html, /aria-label="Record canvas hide\/show shortcut"/)
+    assert.match(html, /value="Ctrl\+Shift\+H"/)
+    assert.match(html, /id="deepseek-harness-kr-canvas-hint"/)
+    // 공통 안내는 '단축키 - 캐릭터와 말풍선' 제목 바로 뒤, 첫 항목(설정 토글 단축키) 앞에 한 번만 나온다
+    const hintAt = html.indexOf('Click the field, then press the keys you want')
+    const firstFieldAt = html.indexOf('Record character and speech bubbles toggle shortcut')
+    assert.ok(hintAt > 0 && hintAt < firstFieldAt)
+    // 비활성화되는 줄들(이동 키·캔버스·펫 창)보다 설정 토글 단축키가 위에 온다
+    assert.ok(firstFieldAt < html.indexOf('Record drag key'))
+    assert.ok(firstFieldAt < html.indexOf('Record canvas hide/show shortcut'))
+    assert.ok(firstFieldAt < html.indexOf('Record pet window shortcut'))
+    assert.equal((html.match(/Click the field, then press the keys you want/g) || []).length, 1)
+    // 스위치가 꺼져 있으면 캔버스 단축키 칸은 비활성 모양(disabled)이다
+    assert.match(html, /aria-label="Record canvas hide\/show shortcut"[^>]*disabled=""/)
+    // 캔버스 단축키는 '캐릭터와 말풍선 설정 토글' 바로 다음, 펫 창 앞에 온다
+    const charAt = html.indexOf('Record character and speech bubbles toggle shortcut')
+    const canvasAt = html.indexOf('Record canvas hide/show shortcut')
+    const petAt = html.indexOf('Record pet window shortcut')
+    assert.ok(charAt > 0 && charAt < canvasAt && canvasAt < petAt)
+    // 스위치는 단축키 칸 바로 왼쪽(같은 줄의 입력 바로 앞)에 온다
+    assert.ok(html.indexOf('Enable canvas hide/show') < canvasAt)
+    assert.match(html, /Enable canvas hide\/show[^]{0,400}?Record canvas hide\/show shortcut/)
+    ctx.dispose()
+  } finally { h.dom.window.close() }
+})
+
+test('canvas shortcut row is disabled while the character setting is off', () => {
+  const h = clientHarness({ character: false, theme: false, translation: false, canvasToggle: true, canvasToggleKey: 'Ctrl+Shift+H' })
+  try {
+    const ctx = h.ctx(); h.client.apply(ctx)
+    const Page = h.pages.get(packageName + '#deepseek-harness-kr')
+    const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
+    assert.match(html, /Unavailable while the character and speech bubbles are off/)
+    assert.match(html, /aria-label="Record drag key"[^>]*disabled=""/)
+    assert.match(html, /aria-label="Record pet window shortcut"[^>]*disabled=""/)
+    assert.match(html, /aria-label="Record canvas hide\/show shortcut"[^>]*disabled=""/)
+    assert.match(html, /aria-label="Enable canvas hide\/show"[^>]*disabled=""/)
+    // 캐릭터를 다시 켤 수 있는 토글 단축키는 계속 활성
+    assert.match(html, /aria-label="Record character and speech bubbles toggle shortcut"(?![^>]*disabled="")/)
+    assert.match(html, /This shortcut still turns the character back on while it is off/)
+    ctx.dispose()
+  } finally { h.dom.window.close() }
+})
+
+test('settings page explains a hidden canvas instead of implying the setting is off', () => {
+  const h = clientHarness({ character: true, theme: true, translation: true, canvasToggle: true })
+  h.dom.window.__dscCanvasHidden = () => true
+  try {
+    const ctx = h.ctx(); h.client.apply(ctx)
+    const Page = h.pages.get(packageName + '#deepseek-harness-kr')
+    const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
+    assert.match(html, /The canvas is hidden right now \(the character setting is still on\)/)
+    assert.match(html, /Show again/)
+    ctx.dispose()
+  } finally { h.dom.window.close() }
+})
+
+test('pet window shortcut calls the toggle the character exposes', () => {
+  const h = clientHarness({ character: false, theme: false, translation: false, petToggleKey: 'Ctrl+Shift+P' })
+  try {
+    const ctx = h.ctx(); h.client.apply(ctx)
+    let calls = 0
+    h.dom.window.__dscPetToggle = () => { calls++ }
+    const press = (extra = {}, target = h.dom.window) => {
+      const event = new h.dom.window.KeyboardEvent('keydown', { key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true, ...extra })
+      target.dispatchEvent(event)
+      return event
+    }
+    assert.equal(press().defaultPrevented, true)
+    assert.equal(calls, 1)
+    press({ repeat: true })   // 키를 계속 누르고 있어도 한 번만
+    assert.equal(calls, 1)
+    press({ shiftKey: false })   // 다른 조합은 무시
+    assert.equal(calls, 1)
+    const input = h.dom.window.document.createElement('input')
+    h.dom.window.document.body.append(input)
+    press({}, input)   // 입력 칸 안에서는 무시
+    assert.equal(calls, 1)
+    ctx.dispose()
+  } finally { h.dom.window.close() }
+})
+
+test('canvas shortcut only runs when enabled and works inside the composer', async () => {
+  const h = clientHarness({ character: false, theme: false, translation: false, canvasToggle: true, canvasToggleKey: 'Ctrl+Shift+H' })
+  try {
+    const ctx = h.ctx(); h.client.apply(ctx)
+    let calls = 0
+    h.dom.window.__dscCanvasToggle = () => { calls++ }
+    const fire = (type, extra = {}, target = h.dom.window) => {
+      const event = new h.dom.window.KeyboardEvent(type, { key: 'H', code: 'KeyH', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true, ...extra })
+      target.dispatchEvent(event)
+      return event
+    }
+    const press = (extra = {}, target = h.dom.window) => {
+      const event = fire('keydown', extra, target)
+      const releaseEvent = fire('keyup', extra, target)
+      return { event, releaseEvent }
+    }
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+    assert.equal(press().event.defaultPrevented, true)
+    assert.equal(calls, 1)
+    await wait(180)   // 누른 시각 기준 연타 방지(150ms) 밖으로
+    const input = h.dom.window.document.createElement('textarea')
+    h.dom.window.document.body.append(input)
+    press({}, input)   // 수식 키 조합은 입력창 안에서도 동작
+    assert.equal(calls, 2)
+    press({ shiftKey: false })   // 다른 조합은 무시
+    assert.equal(calls, 2)
+    await wait(180)
+    h.form.update({ ...h.form.getSnapshot().value, canvasToggle: false })
+    press()
+    assert.equal(calls, 2)   // 기능을 끄면 단축키가 동작하지 않음
+    ctx.dispose()
+  } finally { h.dom.window.close() }
+})
+
+test('pet window settings panel is tall enough to avoid a needless scrollbar', async () => {
+  const css = await readFile(new URL('../../assets/character.css', import.meta.url), 'utf8')
+  assert.match(css, /#dsc-pet-panel \{[^}]*max-height: 560px/)
+  assert.doesNotMatch(css, /#dsc-pet-panel \{[^}]*max-height: 440px/)
+})
+
+test('character source supports modifier drag and a pet window toggle', async () => {
+  const source = await readFile(new URL('../../assets/dsc.js', import.meta.url), 'utf8')
+  for (const code of [source, bundle]) {
+    assert.match(code, /const both = \(e\.buttons & 3\) === 3 \|\| dragKeyHeld\(e\)/)
+    assert.match(code, /window\.__dscPetToggle = petToggle/)
+    assert.match(code, /link\.queue\.push\(\["drag", \[dragKeyRaw\(\)\]\]\)/)
+    assert.match(code, /fn === "drag"\) window\.__dscDrag = \{ key: a\[0\] \}/)
+    assert.match(code, /fn === "dragheld"\)/)
+    assert.match(code, /window\.__dscCanvasToggle = \(\) => setHidden\(!hidden\)/)
+    assert.match(code, /id = "dsc-hide-chip"/)
+  }
 })
 
 test('sleep minutes are bounded in schema and client settings', () => {
@@ -492,15 +670,14 @@ test('plugin settings page exposes feature and power saving switches', () => {
     assert(Page)
     const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
     assert.equal((html.match(/role="switch"/g) || []).length, 7)
-    assert.equal((html.match(/<input type="checkbox" role="switch" checked=""/g) || []).length, 5)
+    assert.equal((html.match(/<input type="checkbox" role="switch" checked=""/g) || []).length, 4)
     assert.match(html, /Character and speech bubbles/)
-    assert.match(html, /Show character on mobile/)
     assert.match(html, /Intro on startup/)
     assert.match(html, /App shortcut icon/)
     assert.match(html, /Pastel theme/)
     assert.match(html, /Korean language pack/)
     assert.match(html, /aria-label="Power saving"/)
-    assert.match(html, /aria-label="Shortcut"/)
+    assert.match(html, /aria-label="Shortcuts - Character and speech bubbles"/)
     assert.match(html, /min="0.5" max="60"/)
     ctx.dispose()
   } finally { h.dom.window.close() }
@@ -769,7 +946,7 @@ test('settings page shows the voice section without needing a YAML edit', () => 
     assert.match(html, /AI-generated voice/)
     assert.match(html, /credential store is unavailable/)
     assert.match(html, /type="password"/)
-    assert.equal((html.match(/role="switch"/g) || []).length, 7, 'feature, mobile, intro, icon and sleep switches are present')
+    assert.equal((html.match(/role="switch"/g) || []).length, 7, 'feature, intro, icon, sleep and canvas switches are present')
     ctx.dispose()
   } finally { h.dom.window.close() }
 })

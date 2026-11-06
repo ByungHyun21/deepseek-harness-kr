@@ -68,11 +68,23 @@ html body[data-ds-dark-theme] #dsc-bubble.mutter {
 }
 html body[data-ds-dark-theme] #dsc-bubble.mutter::after { border-color: var(--dsc-mutter-line); }
 
+/* 캔버스만 숨김 상태에서 남겨 두는 복구 칩 (단축키가 안 먹어도 클릭으로 복구) */
+#dsc-hide-chip {
+  position: fixed; right: 12px; bottom: 12px; z-index: 60;
+  padding: 6px 11px; border-radius: 999px; border: 2px solid #8fa6ff;
+  background: #fffffff7; color: #26315e; box-shadow: 0 6px 18px #5f7cf544;
+  font: 600 12px/1.4 "Malgun Gothic", sans-serif; word-break: keep-all;
+  cursor: pointer;
+}
+#dsc-hide-chip:hover { background: #eef1ff; }
+html body[data-ds-dark-theme] #dsc-hide-chip { background: #1d1f27f2; color: #e8ecff; border-color: #7b8fd1; }
+html body[data-ds-dark-theme] #dsc-hide-chip:hover { background: #262a35; }
+
 /* 바깥 펫 창 우클릭 메뉴에서 여는 설정 패널 */
 #dsc-pet-panel {
   position: fixed; z-index: 60; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  width: 300px; max-height: 440px; overflow: auto; box-sizing: border-box;
-  padding: 12px 14px 14px; border-radius: 16px; background: #fffffff7; color: #26315e;
+  width: 300px; max-height: 560px; overflow: auto; box-sizing: border-box;
+  padding: 11px 13px 12px; border-radius: 16px; background: #fffffff7; color: #26315e;
   border: 2px solid #8fa6ff; box-shadow: 0 10px 30px #5f7cf555;
   font: 600 13px/1.45 "Malgun Gothic", sans-serif; word-break: keep-all;
   display: none; pointer-events: auto; user-select: none;
@@ -85,14 +97,14 @@ html body[data-ds-dark-theme] #dsc-bubble.mutter::after { border-color: var(--ds
   background: #eef1ff; color: #4a5aa0; font-size: 17px; line-height: 1; cursor: pointer;
 }
 #dsc-pet-panel .dsc-panel-close:hover { background: #dfe5ff; }
-#dsc-pet-panel .dsc-panel-section { padding: 9px 0; border-top: 1px solid #e3e8ff; }
+#dsc-pet-panel .dsc-panel-section { padding: 8px 0; border-top: 1px solid #e3e8ff; }
 #dsc-pet-panel .dsc-panel-section:first-of-type { border-top: 0; padding-top: 2px; }
-#dsc-pet-panel .dsc-panel-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+#dsc-pet-panel .dsc-panel-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
 #dsc-pet-panel .dsc-panel-row small { color: #8b96c4; font-size: 11px; font-weight: 500; }
 #dsc-pet-panel .dsc-panel-row output { color: #5f6fae; font-variant-numeric: tabular-nums; }
 #dsc-pet-panel .dsc-panel-sub { margin-bottom: 6px; color: #5f6fae; }
 #dsc-pet-panel input[type="range"] { width: 100%; margin: 0; accent-color: #8fa6ff; }
-#dsc-pet-panel .dsc-panel-check { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; }
+#dsc-pet-panel .dsc-panel-check { display: flex; align-items: center; gap: 8px; padding: 2px 0; cursor: pointer; }
 #dsc-pet-panel .dsc-panel-check input { accent-color: #8fa6ff; margin: 0; }
 #dsc-pet-panel .dsc-panel-actions { padding-bottom: 0; }
 #dsc-pet-panel .dsc-panel-actions button {

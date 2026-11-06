@@ -73,6 +73,14 @@ export const Config = z.object({
   idleSleepMinutes: z.number().min(0.5).max(60).default(1).volatile(),
   // 캐릭터 토글 단축키 (비워 두면 단축키 없음). 예: "Ctrl+Shift+D", "Alt+C"
   characterToggleKey: z.string().default('Ctrl+Shift+D').volatile(),
+  // 캐릭터를 집어 옮길 때 누르고 있어야 하는 키 하나 (수식 키 또는 일반 키). 비우면 예전처럼 왼쪽·오른쪽 버튼을 함께 눌러야 한다.
+  dragKey: z.string().default('Alt').volatile(),
+  // 바깥 펫 창으로 내보내기·돌아오기 단축키 (비워 두면 단축키 없음). 예: "Ctrl+Shift+P"
+  petToggleKey: z.string().default('Ctrl+Shift+P').volatile(),
+  // 캔버스만 숨김/표시: 캐릭터를 내리지 않고 그리기만 멈춰 즉시 전환한다. 성능 부담이 있어 기본 꺼짐(원하는 사람만 켬).
+  canvasToggle: z.boolean().default(false).volatile(),
+  // 캔버스 숨김/표시 단축키 (canvasToggle이 켜져 있을 때만 동작, 비우면 없음). 예: "Ctrl+Shift+H"
+  canvasToggleKey: z.string().default('Ctrl+Shift+H').volatile(),
 })
 export const ASSET_PATH = '/deepseek-harness-kr/assets'
 const assets = fileURLToPath(new URL('../assets/', import.meta.url))
