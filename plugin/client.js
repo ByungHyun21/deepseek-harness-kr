@@ -581,6 +581,7 @@ function settingsPage(ctx, form, updater, keys) {
     if (state.status !== 'ready') return React.createElement('p', { role: 'status' }, ko ? '설정을 불러오는 중입니다.' : 'Loading settings…')
     const fields = [
       ['character', ko ? '캐릭터와 말풍선' : 'Character and speech bubbles'],
+      ['mobileCharacter', ko ? '모바일에서도 캐릭터 표시' : 'Show character on mobile'],
       ['intro', ko ? '시작할 때 등장 연출' : 'Intro on startup'],
       ['appIcon', ko ? '앱 바로가기 아이콘 (Windows)' : 'App shortcut icon (Windows)'],
       ['theme', ko ? '파스텔 테마' : 'Pastel theme'],
@@ -739,8 +740,10 @@ function apply(ctx) {
       window.__dscSleep = { enabled: value.idleSleep !== false, minutes: sleepMinutes(value.idleSleepMinutes) }
       // 시작 등장 연출 여부: 캐릭터가 처음 뜰 때 읽는다 (끄면 가운데 인사 없이 바로 제자리에)
       window.__dscIntro = { enabled: value.intro !== false }
+      // 모바일(터치 전용) 화면에서 캐릭터를 숨길지: 캐릭터가 매 프레임 읽는다 (기본 표시)
+      window.__dscMobile = { enabled: value.mobileCharacter !== false }
     }
-    life.add(() => { delete window.__dscOutfit; delete window.__dscSleep; delete window.__dscIntro })
+    life.add(() => { delete window.__dscOutfit; delete window.__dscSleep; delete window.__dscIntro; delete window.__dscMobile })
     life.add(form.subscribe(sync))
     // 단축키로 캐릭터 토글: 설정의 character 스위치를 뒤집는다 (설정 화면과 같은 저장소·같은 마운트/정리 경로)
     let heldToggleKey = '', togglePending = false

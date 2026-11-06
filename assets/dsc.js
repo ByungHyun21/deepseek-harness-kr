@@ -159,9 +159,6 @@
       const baseY = model.y;
       const chibiDrop = Math.max(0, H * 0.99 - chibiMaxY * s - baseY);   // 꼬마일 때 내리는 거리 (캔버스 px)
       const chibiHeadDrop = (chibiMinY - minY) * s + chibiDrop;            // 꼬마일 때 머리 꼭대기가 내려가는 거리 (말풍선 위치용)
-      // 말풍선 꼬리 기준 = 얼굴(코) 가운데. 상반신 bbox에서 얼굴 중심이 놓이는 가로 비율로 잡는다(실측 5.5%).
-      // 꼬리는 정수리 위에서 수직으로 올라오고, 얼굴은 상반신 bbox 가운데에서 오른쪽으로 조금 치우쳐 있다.
-      const noseModelX = BUST_CX + (ux1 - ux0) * 0.055;
       // ---------- Core 계산을 Worker로 (결과는 1프레임 늦게 반영) ----------
       // 정점 변형(Core update)은 Worker의 같은 모델이 맡고, 메인은 받은 결과를 Core 배열에 복사만 한다.
       // 렌더러·터치 판정은 그대로 Core 배열을 읽는다. Worker를 못 쓰거나 실패하면 원래대로 메인에서 계산.
@@ -259,30 +256,107 @@
 
       // 위치: 오른쪽 아래 구석, 입력창을 가리지 않는 가장 큰 크기
       const visW = bw * s, visH = H * 0.95;
+      // 모바일(터치 전용) 화면에서 캐릭터를 숨기는 설정과, 브라우저 시각 뷰포트(주소창·키보드) 보정
+      const coarsePointer = () => typeof matchMedia === "function" && matchMedia("(hover: none) and (pointer: coarse)").matches;
+      const mobileHidden = () => !!window.__dscMobile && window.__dscMobile.enabled === false && coarsePointer();
+      // 입력 중(모바일 키보드가 열린 상태)이면 캐릭터·말풍선을 잠시 숨긴다 — 입력창과 대화를 가리지 않고, 키보드가 화면을 밀 때 따라 올라가지도 않게
+      // 주의: DSH 컴포저는 마운트 직후 포커스만 잡고 키보드를 열지 않을 수 있다. 포커스만으로 숨기면
+      // 모바일에서 캐릭터가 항상 사라지므로, 실제 visualViewport 축소/pan 신호가 있을 때만 숨긴다.
+      const keyboardOpen = () => {
+        const vv = typeof visualViewport !== "undefined" && visualViewport ? visualViewport : null;
+        if (!vv || vv.scale !== 1) return false;
+        // 크롬 안드로이드: 키보드가 비주얼 뷰포트를 줄이거나 화면을 위로 pan 한다 (innerHeight 는 그대로인 경우가 많다)
+        return (innerHeight - vv.height) > 120 || vv.offsetTop > 4;
+      };
+      const typingActive = () => coarsePointer() && keyboardOpen();
+      const viewport = () => {
+        const vv = typeof visualViewport !== "undefined" && visualViewport ? visualViewport : null;
+        return vv ? { w: vv.width, h: vv.height, top: vv.offsetTop, left: vv.offsetLeft } : { w: innerWidth, h: innerHeight, top: 0, left: 0 };
+      };
+      // 모바일에서만 시각 뷰포트(주소창·키보드)를 쓴다. 데스크톱은 예전처럼 창 크기로 계산한다.
+      const layoutViewport = () => coarsePointer() ? viewport() : { w: innerWidth, h: innerHeight, top: 0, left: 0 };
+      // 제자리 배치: 컴포저(입력 카드) 오른쪽·아래 여유가 있으면 오른쪽 아래(데스크톱),
+      // 좁은 화면처럼 옆 여유가 없으면 컴포저 위로 올린다. 위쪽에는 말풍선 자리(BUBBLE_ROOM)를 남겨 두고,
+      // 자동 크기일 때 컴포저 위 자리는 대화 내역을 덜 가리도록 조금 작게(MOBILE_ABOVE_SCALE) 둔다
+      const HOME_GAP = 8, BUBBLE_ROOM = 78, SHOW_K = 0.42, MIN_SHOW_K = 0.18, MOBILE_ABOVE_SCALE = 0.3;
+      const homeLayout = ({ vp, r, maxK, W, visW, H, visH, minK, allowAbove = true }) => {
+        const rightX = (k) => vp.left + vp.w - 4 - (W + visW) / 2 * k;
+        const bottomY = (k) => vp.top + vp.h - H * k;
+        const fit = (k, above) => {
+          const cap = above ? Math.min(maxK, ((r.top - vp.top) - HOME_GAP) / H) : Math.min(maxK, (vp.w - HOME_GAP) / visW);
+          const want = k * (above ? MOBILE_ABOVE_SCALE : 1);   // 컴포저 위(모바일 세로)는 자동 맞춤 크기의 30%로 줄인다
+          const kk = Math.max(MIN_SHOW_K, Math.min(cap, want));
+          return above
+            ? { k: kk, x: rightX(kk), y: r.top - HOME_GAP - H * kk, above: true }
+            : { k: kk, x: rightX(kk), y: bottomY(kk), above: false };
+        };
+        if (!r) {
+          const k = Math.min(maxK, Math.max(MIN_SHOW_K, maxK));
+          return { k, x: rightX(k), y: bottomY(k), above: false };
+        }
+        const sideK = Math.min(maxK, Math.max((vp.w - (r.right - vp.left) - HOME_GAP) / visW, (vp.h - (r.bottom - vp.top) - (allowAbove ? 4 : 10)) / visH));
+        // 데스크톱은 업스트림과 같은 계산을 그대로 쓴다 (작은 창에서도 붙을 자리는 dockTarget이 처리)
+        if (!allowAbove) return { k: sideK, x: rightX(sideK), y: bottomY(sideK), above: false };
+        const aboveRoom = (r.top - vp.top) - HOME_GAP - BUBBLE_ROOM;
+        const aboveK = Math.min(maxK, aboveRoom / H, (vp.w - HOME_GAP) / visW);
+        if (sideK >= Math.min(minK, maxK)) return fit(sideK, false);
+        // 컴포저 위 배치(자동 크기의 30%)는 터치 화면에서만 쓴다
+        if (aboveK >= MIN_SHOW_K) return fit(aboveK, true);
+        const k = Math.min(maxK, MIN_SHOW_K);
+        return { k, x: rightX(k), y: bottomY(k), above: false, noSafe: true };   // 컴포저 위·아래 어디에도 피할 자리가 없음 → 제자리에서는 숨긴다
+      };
+      // 말풍선 배치: 머리 위가 기본. 카드와 겹치면 옆/아래로 피하되, 뷰포트 밖으로 나가지 않게 자른다
+      const bubbleLayout = ({ vp, headX, headTop, bw, bh, r, above }) => {
+        const clampX = (left) => Math.min(Math.max(vp.left + HOME_GAP, left), Math.max(vp.left + HOME_GAP, vp.left + vp.w - bw - HOME_GAP));
+        const clampY = (top) => Math.min(Math.max(vp.top + HOME_GAP, top), Math.max(vp.top + HOME_GAP, vp.top + vp.h - bh - HOME_GAP));
+        const hit = (left, top) => r && left < r.right && left + bw > r.left && top < r.bottom && top + bh > r.top;
+        const aboveTop = clampY(headTop - bh - 10);
+        const aboveLeft = clampX(headX + 55 - bw);   // 꼬리(오른쪽 55px)가 머리 가운데에 오게
+        if (!hit(aboveLeft, aboveTop) || above) return { left: aboveLeft, top: aboveTop, side: false };
+        const below = r.bottom + HOME_GAP, sideLeft = clampX(vp.left + vp.w - bw - HOME_GAP);
+        if (below + bh <= vp.top + vp.h - HOME_GAP) return { left: sideLeft, top: clampY(below), side: true };
+        // 아래로도 자리가 없으면(모바일처럼 컴포저가 화면 끝까지 차지) 머리 위로 유지하고 뷰포트 안으로만 자른다
+        return { left: aboveLeft, top: aboveTop, side: false };
+      };
       let curK = 1, fleeX = 0;     // 현재 배율, 도망·산책으로 옆으로 비켜난 거리(px, + 오른쪽 · - 왼쪽)
       // 자유 위치: 끌어서 옮긴 자리 (창 안 = 창 좌표, 펫 창 = 화면 좌표). 제자리 근처에 놓으면 다시 붙음.
-      const free = { on: false, x: 0, y: 0, k: 1, anim: null };
+      const free = { on: false, x: 0, y: 0, k: 1, anim: null, mode: null, applied: true };
       const drag = { pending: null, on: false, x: 0, y: 0, samples: [] };
       const carry = { vx: 0, vy: 0 };              // 끄는 속도(px/초) → 몸이 관성으로 쏠리고 머리카락·치마가 흔들림
       const shown = { k: 1, x: 0, y: 0 };          // 지난 프레임에 그린 자리 (끌기 시작점)
+      let touchHold = 0;   // 터치에서 길게 눌러 집기 모드로 들어가는 타이머 (오른쪽 버튼이 없는 화면용)
       let petDock = null, petDocked = false, snapP = 0;   // 펫 창: 붙을 자리(DSH 창의 제자리, 화면 좌표), 붙은 뒤, 붙는 진행도
       // 바깥 펫 창 전용: 우클릭 메뉴 상태 ↔ 설정 패널 ↔ 크기. 크기는 '기본(머리 크기 맞춤) 대비 배율'로,
       // 펫 창 프로필(localStorage)에 남겨 다시 켜도 기억한다.
       const PET_SIZE_KEY = "dsc-pet-size";
       let petPanel = null, petPanelOpen = false, petPanelWin = { w: 0, h: 0 };
       let petBaseK = 1, petPendingRatio = null, petSizeTimer = 0, petMenuSig = "";
+      // 자유 위치는 입력 모드별로 따로 기억한다. 같은 브라우저에서 터치 모드와 데스크톱 모드가
+      // 서로의 자리를 덮어쓰지 않게 하기 위해서다.
       const FREE_KEY = "dsc-free-pos";
+      const FREE_KEY_MOBILE = "dsc-free-pos-mobile";
+      const freeMode = () => coarsePointer() ? "mobile" : "desktop";
+      const freeStorageKey = (mode) => mode === "mobile" ? FREE_KEY_MOBILE : FREE_KEY;
       // 창 안 자유 위치는 창 크기 비율로 기억: 몸 가운데의 가로 비율(fx)·그림 아래 끝의 세로 비율(fy).
       // 창 크기가 바뀌면 같은 비율 자리로 옮겨 가서, 최대화를 풀어도 옛 픽셀 자리에 남아 화면 밖으로 밀리지 않음
       const freeToRatio = () => { free.fx = (free.x + W * free.k / 2) / innerWidth; free.fy = (free.y + H * free.k) / innerHeight; };
       if (!PET) try {
-        const s = JSON.parse(localStorage.getItem(FREE_KEY) || "null");
-        if (s && isFinite(s.fx) && isFinite(s.fy) && s.k > 0) Object.assign(free, { on: true, fx: s.fx, fy: s.fy, k: s.k });
+        const mode = freeMode();
+        const s = JSON.parse(localStorage.getItem(freeStorageKey(mode)) || "null");
+        // 예전 단일 키는 데스크톱 자리로 복원한다. 모바일은 새 키만 읽어 서로 덮어쓰지 않는다.
+        if (s && isFinite(s.fx) && isFinite(s.fy) && s.k > 0 && (!s.mode || s.mode === mode)) {
+          Object.assign(free, { on: true, fx: s.fx, fy: s.fy, k: s.k, mode, applied: true });
+        }
       } catch {}
       const saveFree = (fromPose = true) => {   // fromPose: 지금 x·y에서 비율을 다시 계산 (휠처럼 크기만 바꿀 땐 비율을 그대로 둠)
-        if (PET) return;
+        if (PET || free.applied === false) return;   // 다른 입력 모드에서 보류한 자리는 그 모드의 저장 키를 건드리지 않는다
         if (free.on && fromPose) freeToRatio();
-        try { if (free.on) localStorage.setItem(FREE_KEY, JSON.stringify({ fx: +free.fx.toFixed(4), fy: +free.fy.toFixed(4), k: +free.k.toFixed(3) })); else localStorage.removeItem(FREE_KEY); } catch {}
+        try {
+          const mode = free.mode || freeMode();
+          const key = freeStorageKey(mode);
+          if (free.on) localStorage.setItem(key, JSON.stringify({ mode, fx: +free.fx.toFixed(4), fy: +free.fy.toFixed(4), k: +free.k.toFixed(3) }));
+          else localStorage.removeItem(key);
+        } catch {}
       };
       // 산책: 가끔 가까운 쪽 화면 밖으로 걸어 나갔다가 잠시 뒤 같은 쪽에서 걸어 들어옴 (phase: "" | ready | out | away | in, dir: -1 왼쪽 · 1 오른쪽)
       const walk = { phase: "", face: 0, dir: -1, out: 0, timers: [], slideId: 0, lastTouch: 0, next: performance.now() + (180 + Math.random() * 180) * 1000 };
@@ -317,16 +391,18 @@
         const card = findCard();
         // 창 여유 공간에 맞춰 커진다. 상한은 창 높이의 92%와, 펫 창이 그대로 따라갈 수 있는 배율(PET_K_MAX / PET_HEAD_RATIO) 중 작은 쪽
         //  (펫 창이 따라가지 못하는 크기로 키우면 창 밖으로 나갈 때 크기가 튀므로 그 선을 넘지 않게 한다)
-        const maxK = Math.min(PET_K_MAX / PET_HEAD_RATIO, (innerHeight * 0.92) / visH);
-        let k = maxK;
+        const vp = layoutViewport();
+        const maxK = Math.min(PET_K_MAX / PET_HEAD_RATIO, (vp.h * 0.92) / visH);
         const r = card ? cardRect(card) : null;
-        if (r) k = Math.min(maxK, Math.max((innerWidth - r.right - 8) / visW, (innerHeight - r.bottom - 10) / visH));
-        return { k, x: innerWidth - 4 - (W + visW) / 2 * k + fleeX, y: innerHeight - H * k, card, r };
+        // 컴포저 오른쪽·아래 여유가 부족한 좁은 화면(모바일 세로 등)이면 컴포저 위로 올린다 (입력창·전송 버튼을 가리지 않게)
+        const pose = homeLayout({ vp, r, maxK, W, visW, H, visH, minK: SHOW_K, allowAbove: coarsePointer() });
+        return { k: pose.k, x: pose.x + fleeX, y: pose.y, card, r, above: pose.above, noSafe: !!pose.noSafe, vp };
       };
       const centerPose = () => {
         // 가운데 아래에 붙여 상반신이 화면 아래에서 올라온 모습 (잘린 선이 화면 중간에 뜨지 않게)
-        const k = Math.min(innerHeight * 0.74 / visH, innerWidth * 0.55 / visW, 3.2);
-        return { k, x: innerWidth / 2 - W * k / 2, y: innerHeight - H * k };
+        const vp = layoutViewport();
+        const k = Math.min(vp.h * 0.74 / visH, vp.w * 0.55 / visW, 3.2);
+        return { k, x: vp.left + vp.w / 2 - W * k / 2, y: vp.top + vp.h - H * k };
       };
       // 설정에서 '시작할 때 등장 연출'을 끄면 가운데 인사 없이 처음부터 제자리에 뜬다
       const introOff = !!window.__dscIntro && window.__dscIntro.enabled === false;
@@ -352,10 +428,11 @@
       };
       // 창 좌표 → 화면 좌표 (창 테두리·제목 표시줄 두께를 뺌)
       const screenOf = (x, y) => { const bx = (outerWidth - innerWidth) / 2; return { x: screenX + bx + x, y: screenY + Math.max(0, outerHeight - innerHeight - bx) + y }; };
-      const SHOW_K = 0.42;   // 제자리 크기가 이보다 작으면 입력창을 피할 자리가 없음
+      // 제자리 크기가 SHOW_K보다 작으면 입력창을 피할 자리가 없음 (SHOW_K는 위 HOME_GAP 줄에서 정의)
       // 붙을 자리 = 제자리. 창이 좁아 제자리 크기가 SHOW_K보다 작으면(예전엔 숨김) 보일 수 있는 가장 작은 크기로 오른쪽 아래 구석.
+      // 컴포저 위로 올린 자리(above)는 그 자리를 그대로 쓴다 — 아래 구석으로 되돌리면 입력창을 다시 가린다.
       // 매 프레임 다시 계산하므로 창 크기가 바뀌면 붙어 있는 캐릭터의 크기·위치도 따라 바뀜
-      const dockTarget = (home) => (home.k >= SHOW_K ? home : { k: SHOW_K, x: innerWidth - 4 - (W + visW) / 2 * SHOW_K + fleeX, y: innerHeight - H * SHOW_K });
+      const dockTarget = (home) => (home.k >= SHOW_K || home.above || home.noSafe ? home : { k: SHOW_K, x: innerWidth - 4 - (W + visW) / 2 * SHOW_K + fleeX, y: innerHeight - H * SHOW_K });
       // 보이는 몸이 창 밖에 있는지. 경계에서 판정이 왔다 갔다 하지 않게 회색 지대를 둠:
       //   넘어갈 때(entering) = 몸의 15%가 밖으로 나가야 함 (아래쪽은 제자리가 창 아래 끝에 붙어 있어 그림의 50%)
       //   이미 펫 창이 따라오는 중 = 몸이 거의 다 창 안으로 돌아와야(가장자리 2% 안쪽, 아래쪽은 20%만 남음) 창 안으로 봄
@@ -386,11 +463,23 @@
           }
           return pose;
         }
+        const currentMode = freeMode();
+        if (!PET && free.on && free.mode && free.mode !== currentMode) {
+          // 다른 입력 모드에서 저장된 자리(예: 모바일 터치 드래그)는 이 화면에 적용하지 않는다.
+          // 상태는 지우지 않아, 원래 모드로 돌아오면 그 자리를 그대로 다시 쓸 수 있게 한다.
+          free.applied = false;
+          return dockTarget(home);
+        }
+        free.applied = true;
         if (!free.on) return dockTarget(home);
         let q = free;
         if (!PET) {   // 창 크기 비율 자리, 크기는 지금 창에 들어가는 최대치까지만
           if (!isFinite(free.fx) || !isFinite(free.fy)) freeToRatio();
-          const k = Math.max(SHOW_K, Math.min(free.k, Math.min(1.25, (innerHeight * 0.45) / visH)));   // 하한: 이보다 작으면 숨겨짐
+          // 모바일에서는 카드가 있을 때 자동 배치 크기(컴포저 위 = 자동 크기의 30%)를 따르고,
+          // 카드가 잠깐 사라진 프레임에는 마지막 자유 크기를 써서 캐릭터가 갑자기 커지지 않게 한다.
+          const floor = coarsePointer() ? MIN_SHOW_K : SHOW_K;
+          const baseK = coarsePointer() && home.r ? home.k : free.k;
+          const k = Math.max(floor, Math.min(baseK, Math.min(1.25, (innerHeight * 0.45) / visH)));
           q = { k, x: free.fx * innerWidth - W * k / 2, y: free.fy * innerHeight - H * k };
         }
         const p = keepIn(q);
@@ -398,7 +487,7 @@
       };
       // 손을 놓을 때: 속도만큼 조금만 미끄러짐(GLIDE). 멈출 자리가 제자리(펫 창이면 DSH 창의 제자리) 근처면 자석으로 붙고, 창 밖이면 펫 창으로.
       const GLIDE = 0.066;   // 놓을 때 속도 × 이 시간(초)만큼 미끄러짐
-      const release = (vx, vy) => {
+      const release = (vx, vy, touch = false) => {
         const k = free.k, from = { k, x: drag.x, y: drag.y }, p = { k, x: from.x + vx * GLIDE, y: from.y + vy * GLIDE };
         const home = PET ? petDock : dockTarget(homePose());
         const mid = (q, kk) => [q.x + W * kk / 2, q.y + H * kk * 0.5];
@@ -407,7 +496,10 @@
         const outside = !PET && bodyOut(p);
         // 펫 창은 몸이 DSH 창 안으로 거의 다 돌아왔을 때만 붙음 (창 밖 바로 옆, 제자리 근처에 놓았을 때 다시 붙지 않게. 창 안 쪽의 '나올 때' 기준과 같음)
         const backIn = !PET || !home?.win || inWindow(p, home.win);
-        const snap = !outside && backIn && !!home && Math.hypot(px - mid(home, home.k)[0], py - mid(home, home.k)[1]) < Math.max(140, visW * k * 0.7);
+        // 터치도 제자리 근처에 놓으면 snap되게 한다. 모바일에는 우클릭/휠 리셋이 없으므로,
+        // 이 경로가 없으면 자유 위치가 영구 저장되어 컴포저를 계속 가릴 수 있다.
+        const snapRange = touch ? Math.max(80, visW * k * 0.35) : Math.max(140, visW * k * 0.7);
+        const snap = !outside && backIn && !!home && Math.hypot(px - mid(home, home.k)[0], py - mid(home, home.k)[1]) < snapRange;
         if (Math.hypot(vx, vy) > 2600) flashExp("dizzy", 1500);   // 세게 던지면 빙글빙글
         if (outside && link.supported) {
           const a = screenOf(from.x, from.y), b = screenOf(p.x, p.y);
@@ -439,8 +531,20 @@
       };
       const place = () => {
         const now = performance.now();
+        const stopRender = () => { try { app.ticker.stop(); } catch {} };
+        const startRender = () => { try { app.ticker.start(); } catch {} };
+        if (mobileHidden()) {   // 설정에서 모바일 표시를 껐을 때
+          skipIntro();   // 숨긴 상태에서 인트로를 대기시키지 않는다. 다시 켜도 가운데 인트로가 재생되지 않게 한다
+          stopRender();
+          canvas.style.display = bubble.style.display = "none"; veil.style.opacity = 0; veil.style.pointerEvents = "none"; lastPlaceKey = ""; return;
+        }
+        if (typingActive()) {   // 입력 중(키보드 열림)에는 입력창·대화를 가리지 않게 잠시 숨김
+          skipIntro();   // 포커스가 잡힌 채 인트로가 멈춰 렌더러가 계속 돌지 않게 한다
+          stopRender();
+          canvas.style.display = bubble.style.display = "none"; veil.style.opacity = 0; veil.style.pointerEvents = "none"; lastPlaceKey = ""; return;
+        }
         const home = homePose();
-        if (link.open || link.follow?.shown) { link.home = home; canvas.style.display = bubble.style.display = "none"; lastPlaceKey = ""; return; }   // 펫 창이 대신 보여 줌
+        if (link.open || link.follow?.shown) { link.home = home; stopRender(); canvas.style.display = bubble.style.display = "none"; lastPlaceKey = ""; return; }   // 펫 창이 대신 보여 줌
         const dock = dockPose(home, now);
         let { k, x, y } = dock;
         let introOn = intro.phase !== "done", vo = 0;
@@ -464,13 +568,17 @@
           veil.style.opacity = vo; veil.style.pointerEvents = intro.phase === "center" ? "auto" : "none";
           canvas.style.opacity = intro.phase === "center" ? ease((now - intro.start) / 300) : "";   // 아바타는 흐린 배경 위에서 서서히 등장
         }
-        const show = introOn || k >= SHOW_K;
+        const show = introOn || k >= SHOW_K || (home.above && k >= MIN_SHOW_K);   // 컴포저 위 자리는 최소 크기로도 보여 준다
         canvas.style.display = bubble.style.display = show ? "block" : "none";
-        if (!show) return;
+        if (!show) { stopRender(); return; }
+        startRender();
         // 배율이 바뀌면 그만큼 렌더 해상도를 올린다 (펫 창처럼 크게 그릴 때 버퍼가 모자라 뿌옇게 보이던 문제)
         if (curK !== k) { curK = k; setRes(k); }
         shown.k = k; shown.x = x; shown.y = y;
-        const loose = PET || dock !== home;   // 자유 위치·펫 창 (배치 키에 넣어 자리가 바뀌면 다시 계산하게)
+        // 자유 위치·펫 창일 때만 꼬리를 머리 위에 맞춘다. 제자리 크기를 SHOW_K로 올린 경우
+        // dockTarget이 새 포즈 객체를 반환하므로, dock !== home만으로 판정하면 제자리인데도
+        // 말풍선이 화면 오른쪽 10px가 아니라 캐릭터 쪽으로 당겨진다.
+        const loose = PET || (free.on && free.applied) || !!free.anim;
         if (PET) {
           ({ x, y } = movePet(dock));
           // 창 크기를 캐릭터에 맞춘다 (배율 상한이 없으므로 화면에 들어가는 만큼 창도 커진다)
@@ -519,10 +627,10 @@
         const petFade = PET ? Math.min(1, Math.max(0, petDocked ? 1 : snapP)) : 0;   // 붙는 진행도 (0 = 전신 그대로, 1 = 하반신 완전히 사라짐)
         // 펫 창: DSH 창 안쪽은 또렷하게, 창 밖으로 나간 부분은 흐리게(반투명) — 창 영역을 기준으로 자른다
         const winBox = PET && petDock && petDock.win ? petDock.win : null;
-        const noseX = x + (model.x + noseModelX * model.scale.x) * k;   // 말풍선 꼬리 기준: 얼굴(코) 가운데
+        const vp = home.vp || viewport();
         const r0 = home.r;
-        const placeKey = introOn ? "" : [k, x, y, innerWidth, innerHeight, fleeX, Math.round(bodyW * 40), r0 && r0.left, r0 && r0.right, r0 && r0.top, r0 && r0.bottom, Math.round(noseX / 3),
-          bubble.textContent, bubble.className.replace(/\bside\b/g, "").trim(), fade, Math.round(petFade * 60), loose,
+        const placeKey = introOn ? "" : [k, x, y, vp.left, vp.top, vp.w, vp.h, fleeX, Math.round(bodyW * 40), r0 && r0.left, r0 && r0.right, r0 && r0.top, r0 && r0.bottom,
+          home.above ? 1 : 0, bubble.textContent, bubble.className.replace(/\bside\b/g, "").trim(), fade, Math.round(petFade * 60), loose,
           winBox ? [winBox.l, winBox.t, winBox.r, winBox.b].join(",") : ""].join("|");
         if (placeKey && placeKey === lastPlaceKey) return;
         lastPlaceKey = placeKey;
@@ -556,25 +664,51 @@
         bubble.classList.remove("side");
         if (introOn) {   // 가운데에선 머리 위에 큰 말풍선
           bubble.style.right = "auto"; bubble.style.fontSize = "22px"; bubble.style.padding = "14px 24px"; bubble.style.maxWidth = "560px";
-          // 꼬리(오른쪽 55px)가 코 위에 오도록: 왼쪽 = 코 - (폭 - 55), 화면 안으로 클램프
-          bubble.style.left = Math.max(10, Math.min(noseX - (bubble.offsetWidth - 55), innerWidth - 10 - bubble.offsetWidth)) + "px";
-          bubble.style.top = Math.max(8, headTop - bubble.offsetHeight - 6) + "px";
+          if (!coarsePointer()) {   // 데스크톱은 예전처럼 가운데 머리 위에 둔다
+            bubble.style.left = (x + W * k / 2 - bubble.offsetWidth / 2) + "px";
+            bubble.style.top = Math.max(8, headTop - bubble.offsetHeight - 6) + "px";
+            return;
+          }
+          const bw0 = bubble.offsetWidth, bh0 = bubble.offsetHeight;
+          const clampX = (left) => Math.min(Math.max(vp.left + HOME_GAP, left), Math.max(vp.left + HOME_GAP, vp.left + vp.w - bw0 - HOME_GAP));
+          const clampY = (top) => Math.min(Math.max(vp.top + HOME_GAP, top), Math.max(vp.top + HOME_GAP, vp.top + vp.h - bh0 - HOME_GAP));
+          bubble.style.left = clampX(x + W * k / 2 - bw0 / 2) + "px";
+          bubble.style.top = clampY(Math.max(vp.top + HOME_GAP, headTop - bh0 - 6)) + "px";
           return;
         }
         const card = home.card;
-        // 꼬리(말풍선 오른쪽 55px)를 코 위에 둔다. 캐릭터가 커져도(좁은 창) 꼬리는 얼굴을 따라간다.
-        bubble.style.right = Math.max(10, innerWidth - (noseX + 55)) + "px";
-        bubble.style.maxWidth = Math.max(150, visW * k * 1.1) + "px";
-        bubble.style.top = Math.max(8, headTop - bubble.offsetHeight - 10) + "px";
-        if (card && home.r) {
-          const r = home.r, bl = bubble.offsetLeft, bt = bubble.offsetTop, b = { left: bl, top: bt, right: bl + bubble.offsetWidth, bottom: bt + bubble.offsetHeight };   // 등장 애니메이션(transform) 영향 없는 레이아웃 크기
-          if (b.left < r.right && b.right > r.left && b.top < r.bottom && b.bottom > r.top) {
-            bubble.classList.add("side");
-            bubble.style.maxWidth = "220px";
-            bubble.style.right = innerWidth - (x + (W - visW) / 2 * k) + 8 + "px";
-            bubble.style.top = Math.max(r.bottom + 8, headTop + 4) + "px";
+        if (!coarsePointer() && !home.above) {   // 데스크톱 말풍선은 기존 배치 그대로
+          bubble.style.left = "auto";
+          bubble.style.right = loose ? Math.max(10, innerWidth - (x + W * k / 2 + 55)) + "px" : "10px";   // 꼬리(말풍선 오른쪽 55px)를 머리 가운데에
+          bubble.style.maxWidth = Math.max(150, visW * k * 1.1) + "px";
+          bubble.style.top = Math.max(8, headTop - bubble.offsetHeight - 10) + "px";
+          if (card && home.r) {
+            const r = home.r, bl = bubble.offsetLeft, bt = bubble.offsetTop, b = { left: bl, top: bt, right: bl + bubble.offsetWidth, bottom: bt + bubble.offsetHeight };   // 등장 애니메이션(transform) 영향 없는 레이아웃 크기
+            if (b.left < r.right && b.right > r.left && b.top < r.bottom && b.bottom > r.top) {
+              bubble.classList.add("side");
+              bubble.style.maxWidth = "220px";
+              // 제자리(snap)에서는 화면 오른쪽 10px를 유지한다. 자유 위치에서만 꼬리를 캐릭터에 맞춘다.
+              bubble.style.right = loose ? innerWidth - (x + (W - visW) / 2 * k) + 8 + "px" : "10px";
+              const sideTop = Math.max(r.bottom + 8, headTop + 4);
+              if (sideTop + bubble.offsetHeight <= innerHeight - HOME_GAP) bubble.style.top = sideTop + "px";
+              else {
+                // 컴포저가 화면 아래 끝까지 차지해 아래로 피할 자리가 없으면, 화면 밖으로 내리지 않고
+                // 캐릭터에 붙인 right 기준을 유지한 채 위쪽으로만 clamp한다.
+                bubble.classList.remove("side");
+                bubble.style.maxWidth = Math.min(Math.max(150, visW * k * 1.1), innerWidth - 16) + "px";
+                bubble.style.top = Math.max(8, Math.min(innerHeight - bubble.offsetHeight - HOME_GAP, headTop - bubble.offsetHeight - 10)) + "px";
+              }
+            }
           }
+          return;
         }
+        bubble.style.right = "auto";
+        bubble.style.maxWidth = Math.min(Math.max(150, visW * k * 1.1), vp.w - 16) + "px";
+        // 머리 위가 기본. 카드와 겹치면 옆/아래로 피하고, 뷰포트(주소창·키보드) 밖으로는 나가지 않게 자른다
+        const bl = bubbleLayout({ vp, headX: x + W * k / 2, headTop, bw: bubble.offsetWidth, bh: bubble.offsetHeight, r: card && home.r ? home.r : null, above: home.above });
+        bubble.style.left = bl.left + "px";
+        bubble.style.top = bl.top + "px";
+        if (bl.side && !home.above) bubble.classList.add("side");
       };
       const raf = () => { if (SLEEP.state !== "asleep") place(); requestAnimationFrame(raf); };
       requestAnimationFrame(raf);
@@ -1867,6 +2001,16 @@
         if (intro.phase !== "done" || fleeX !== 0 || link.opening) { if (h && !head) onTouch(h[0], h[1], h[2]); return; }   // 시작 연출·도망·펫 창 여는 중엔 끌기 없음 (머리는 떼는 순간 터치)
         const [px, py] = pt(e);
         drag.pending = { id: e.pointerId, sx: px, sy: py, h, ox: px - shown.x, oy: py - shown.y };
+        // 터치 화면에는 오른쪽 버튼이 없으니, 길게 누르면 집기 모드로 바꾼다 (그 뒤 움직이면 옮겨짐, 그냥 떼면 터치 반응)
+        if (e.pointerType === "touch") {
+          clearTimeout(touchHold);
+          touchHold = setTimeout(() => {
+            if (!drag.pending || drag.pending.id !== e.pointerId) return;
+            drag.pending.touchGrab = true;
+            strokeFrom = null; chestFrom = null;   // 길게 눌렀으면 쓰다듬기·가슴 끌기 판정은 취소
+            if (PET) PET.press(true);
+          }, 320);
+        }
         if (PET) PET.press(true);   // 누르고 있는 동안은 커서가 몸 밖으로 벗어나도 클릭을 계속 받음
         if (link.supported && link.petState === "none") linkPost("warm");   // 끌 수도 있으니 누르는 순간 펫 창을 숨긴 채 미리 띄움
         else if (!PET && link.petState === "shown" && !link.open && !link.follow) linkPost("hide");   // 붙은 직후 아직 남은 펫 창이 있으면 바로 숨김
@@ -1879,8 +2023,18 @@
       };
       document.addEventListener("pointermove", (e) => {
         if (PET && petPanelOpen && petPanel && petPanel.contains(e.target)) return;   // 패널 안 조작은 캐릭터 끌기로 이어지지 않음
+        // 터치: 가로로 끌면 길게 누르기를 기다리지 않고 바로 집기로 본다 (세로 제스처는 쓰다듬기·가슴 끌기로 남김)
+        if (e.pointerType === "touch" && drag.pending && !drag.pending.touchGrab && e.pointerId === drag.pending.id) {
+          const dx = e.clientX - drag.pending.sx, dy = e.clientY - drag.pending.sy;
+          if (Math.hypot(dx, dy) > 14) {
+            clearTimeout(touchHold);   // 길게 누르기 전에 크게 움직였으면 제스처로 넘김
+            if (Math.abs(dx) > Math.abs(dy) * 1.2) drag.pending.touchGrab = true;
+          }
+        }
+        // 터치에서 길게 누르거나 가로로 끌어 집기 모드가 되면 오른쪽 버튼을 누른 것처럼 취급한다
+        const touchGrab = !!(drag.pending && drag.pending.touchGrab && e.pointerId === drag.pending.id);
         // 왼쪽·오른쪽을 함께 누른 채 움직이면 곧바로 집어 옮긴다. 머리 쓰다듬기·가슴 끌기 판정과 6px 기준을 거치지 않는다
-        const both = (e.buttons & 3) === 3;
+        const both = (e.buttons & 3) === 3 || touchGrab;
         if (chestFrom && !both && e.pointerId === chestFrom.id) {
           const dy = e.clientY - chestFrom.y, dx = e.clientX - chestFrom.x, now = performance.now();
           if (!chestDragging) {
@@ -1925,7 +2079,7 @@
         const [px, py] = pt(e), now = performance.now();
         if (!drag.on) {
           cancelWalk();   // 산책 가려고 말하던 중이면 취소
-          drag.on = true; drag.samples = []; free.anim = null; free.k = shown.k; petDocked = false;
+          drag.on = true; drag.touch = e.pointerType === "touch" || !!(p && p.touchGrab); drag.samples = []; free.anim = null; free.k = shown.k; free.mode = freeMode(); free.applied = true; petDocked = false;
           try { document.documentElement.setPointerCapture(e.pointerId); } catch {}
           document.documentElement.classList.add("dsc-grabbing");
           until.sweat = Infinity;   // 들고 있는 동안 식은땀
@@ -1977,7 +2131,8 @@
       };
       const endDrag = (e, cancel) => {
         const p = drag.pending;
-        if (!p || e.pointerId !== p.id) return;
+        if (!p || e.pointerId !== p.id) return;   // 다른 손가락의 이벤트가 첫 손가락의 길게 누르기를 취소하지 않게 함
+        clearTimeout(touchHold);
         drag.pending = null; strokeFrom = null;
         if (PET) PET.press(false);
         if (!drag.on) { if (!cancel && p.h) onTouch(p.h[0], p.h[1], p.h[2]); return; }   // 끌지 않고 뗌 = 터치 (그림 위에서 눌렀을 때만)
@@ -1989,7 +2144,7 @@
         const moving = performance.now() - drag.samples[drag.samples.length - 1][0] < 80;   // 멈췄다가 놓으면 던지지 않음
         const vx = moving ? carry.vx : 0, vy = moving ? carry.vy : 0;
         if (link.follow && finishFollow(vx, vy)) return;
-        release(vx, vy);
+        release(vx, vy, drag.touch);
       };
       document.addEventListener("pointerup", (e) => {
         if (chestFrom && e.pointerId === chestFrom.id) {
@@ -2023,15 +2178,31 @@
       // 우클릭은 집어 옮기기의 보조 버튼이라, 끄는 중에는 메뉴를 열지 않는다 (펫 창에서는 놓은 뒤에만 메뉴)
       document.addEventListener("contextmenu", (e) => {
         if (drag.pending || drag.on) { e.preventDefault(); e.stopPropagation(); return; }
-        if (!PET) return;
+        if (!PET) {   // 터치 화면에서 캐릭터를 길게 누를 때 뜨는 브라우저 메뉴·선택을 막는다 (집기가 풀리던 원인). 데스크톱 우클릭은 그대로 둔다
+          if (coarsePointer() && overBody(e.clientX, e.clientY)) { e.preventDefault(); e.stopPropagation(); }
+          return;
+        }
         e.preventDefault();
         if (!petPanelOpen && !walking() && overBody(e.clientX, e.clientY)) PET.menu();
       }, true);
+      // 터치에서 캐릭터를 잡고 있는 동안 손가락 움직임이 페이지 스크롤로 해석되면 pointercancel이 와서 집기가 풀린다.
+      // touch-action 대신 터치 이벤트에서 직접 기본 동작을 막는다 (스크롤이 시작되기 전에 취소해야 함)
+      const touchOnBody = (e) => {
+        const t = e.touches && e.touches[0];
+        return !!t && !PET && hitAt(t.clientX, t.clientY) !== null;
+      };
+      document.addEventListener("touchstart", (e) => { if (touchOnBody(e)) e.preventDefault(); }, { passive: false, capture: true });
+      document.addEventListener("touchmove", (e) => {
+        // 캐릭터에서 시작한 제스처만 막는다. 바깥에서 시작한 스크롤이 캐릭터를 지나가며 막히지 않게 한다.
+        if (drag.on || drag.pending) e.preventDefault();
+      }, { passive: false, capture: true });
       // 휠로 크기 조절: 몸 위에서 올리면 커지고 내리면 작아짐 (몸 아래 가운데를 기준으로). 들고 있을 때·움직이는 중·산책·도망 중엔 무시
       //   펫 창 = 0.45배 ~ 화면에 들어가는 크기 (넘겨받을 때는 HEAD_GAIN으로 머리 크기를 창 안과 맞춤)
       //   창 안 = 자유 위치일 때만 0.42배~그 창에 들어가는 최대치. 제자리에 붙어 있으면 크기는 자동이라 휠은 대화 스크롤 그대로
       document.addEventListener("wheel", (e) => {
         if (PET && petPanelOpen && petPanel && petPanel.contains(e.target)) return;   // 패널 안에서는 휠로 크기를 건드리지 않음
+        if (!PET && coarsePointer()) return;   // 모바일에서는 캐릭터 위 휠이 대화 스크롤을 막지 않게 한다
+        if (!free.applied) return;   // 다른 입력 모드의 보류 자리에는 크기 변경을 적용하지 않는다
         if (intro.phase !== "done" || !free.on || !overBody(e.clientX, e.clientY)) return;
         e.preventDefault(); e.stopPropagation();   // 캐릭터 위에서는 대화 스크롤 대신 크기 조절
         if (drag.on || free.anim || walk.phase || fleeX !== 0) return;
