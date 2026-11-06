@@ -60,6 +60,8 @@ export const Config = z.object({
   chestClothes: z.boolean().default(false).volatile(),
   shoesOff: z.boolean().default(false).volatile(),
   tailHide: z.boolean().default(false).volatile(),
+  // 동물귀 숨기기: 모델의 귀 파트(Part159)만 부드럽게 감춘다 (없는 모델에서는 표시만 되고 동작하지 않음)
+  earHide: z.boolean().default(false).volatile(),
   bodyType: z.union([z.const('default'), z.const('type1'), z.const('type2')]).default('default').volatile(),
   tts: TtsConfig,
   // 시작할 때 가운데에서 크게 인사하는 등장 연출 (끄면 처음부터 제자리에 뜬다)

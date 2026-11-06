@@ -11,6 +11,7 @@ const OUTFIT_FIELDS = [
   ['chestClothes', '가슴 옷 바꾸기', 'Change top'],
   ['shoesOff', '신발 벗기', 'Take off shoes'],
   ['tailHide', '꼬리 숨기기', 'Hide tail'],
+  ['earHide', '동물귀 숨기기', 'Hide animal ears'],
 ]
 const BODY_TYPES = [['default', '기본 체형', 'Default'], ['type1', '체형 1', 'Body type 1'], ['type2', '체형 2 (꼬마)', 'Body type 2 (chibi)']]
 const React = require('react')
@@ -696,6 +697,7 @@ function settingsPage(ctx, form, updater, keys) {
     if (state.status !== 'ready') return React.createElement('p', { role: 'status' }, ko ? '설정을 불러오는 중입니다.' : 'Loading settings…')
     const fields = [
       ['character', ko ? '캐릭터와 말풍선' : 'Character and speech bubbles'],
+      ['mobileCharacter', ko ? '모바일에서도 캐릭터 표시' : 'Show character on mobile'],
       ['intro', ko ? '시작할 때 등장 연출' : 'Intro on startup'],
       ['appIcon', ko ? '앱 바로가기 아이콘 (Windows)' : 'App shortcut icon (Windows)'],
       ['theme', ko ? '파스텔 테마' : 'Pastel theme'],
@@ -721,7 +723,7 @@ function settingsPage(ctx, form, updater, keys) {
     const characterOn = state.value?.character !== false
     const canvasToggle = state.value?.canvasToggle === true
     const canvasKeyValue = state.value?.canvasToggleKey ?? 'Ctrl+Shift+H'
-    const dragKey = state.value?.dragKey || 'Alt'
+    const dragKey = state.value?.dragKey ?? 'Alt'
     return React.createElement('div', { style: { display: 'grid', gap: 16 } },
       ...fields.map(([field, label]) => React.createElement('label', { key: field, style: row },
         React.createElement('span', null, label),
@@ -750,7 +752,7 @@ function settingsPage(ctx, form, updater, keys) {
             : 'Click the field, then press the keys you want. Esc cancels, Backspace clears.'),
         React.createElement(ShortcutField, {
           label: ko ? '캐릭터와 말풍선 설정 토글 단축키 (비우면 사용 안 함)' : 'Character and speech bubbles setting toggle shortcut (empty to disable)',
-          hintId: SHORTCUT_HINT_ID,
+          hintId: characterOn ? SHORTCUT_HINT_ID : SHORTCUT_HINT_ID + '-off',   // 꺼짐 안내는 별도 id (문서에 같은 id 두 개 금지)
           hint: characterOn ? '' : (ko ? '캐릭터와 말풍선이 꺼져 있어도 이 단축키로 다시 켤 수 있습니다.' : 'This shortcut still turns the character back on while it is off.'),
           value: shortcutValue,
           placeholder: 'Ctrl+Shift+D',
@@ -889,12 +891,14 @@ function apply(ctx) {
       window.__dscSleep = { enabled: value.idleSleep !== false, minutes: sleepMinutes(value.idleSleepMinutes) }
       // 시작 등장 연출 여부: 캐릭터가 처음 뜰 때 읽는다 (끄면 가운데 인사 없이 바로 제자리에)
       window.__dscIntro = { enabled: value.intro !== false }
-      // 캐릭터 이동 보조 키: 캐릭터가 포인터 이벤트마다 읽는다 (다시 띄우지 않음)
-      window.__dscDrag = { key: value.dragKey || 'Alt' }
+      // 모바일(터치 전용) 화면에서 캐릭터를 숨길지: 캐릭터가 매 프레임 읽는다 (기본 표시)
+      window.__dscMobile = { enabled: value.mobileCharacter !== false }
+      // 캐릭터 이동 보조 키: 캐릭터가 포인터 이벤트마다 읽는다 (다시 띄우지 않음). 빈 문자열이면 '이동 키 없음'.
+      window.__dscDrag = { key: value.dragKey ?? 'Alt' }
       // 캔버스 숨김 기능을 끄면 숨겨 둔 캔버스를 다시 표시 (기능을 되돌렸을 때)
       if (value.canvasToggle !== true && window.__dscCanvasHidden?.() === true) window.__dscCanvasToggle?.()
     }
-    life.add(() => { delete window.__dscOutfit; delete window.__dscSleep; delete window.__dscIntro; delete window.__dscDrag })
+    life.add(() => { delete window.__dscOutfit; delete window.__dscSleep; delete window.__dscIntro; delete window.__dscMobile; delete window.__dscDrag })
     life.add(form.subscribe(sync))
     // 단축키로 캐릭터 토글: 설정의 character 스위치를 뒤집는다 (설정 화면과 같은 저장소·같은 마운트/정리 경로)
     // 키를 떼는 이벤트를 놓쳐도 다음 누름이 막히지 않도록, 누른 시각 기준으로만 연타를 막는다.

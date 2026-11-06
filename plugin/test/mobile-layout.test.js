@@ -175,9 +175,10 @@ test('모드가 다른 자유 위치는 현재 화면에 적용하지 않는다'
   assert.match(source, /free\.mode = freeMode\(\)/)
 })
 
-test('데스크톱 말풍선은 예전 right 배치를 유지하고, 아래 공간이 없으면 캐릭터 기준을 유지한 채 위로 clamp한다', () => {
+test('데스크톱 말풍선 꼬리는 코를 따르고(오른쪽 10px 고정 아님), 아래 공간이 없으면 위로 clamp한다', () => {
   assert.match(source, /if \(!coarsePointer\(\) && !home\.above\)/)
-  assert.match(source, /bubble\.style\.right = loose/)
+  assert.match(source, /bubble\.style\.right = tailRight\(\{ noseX, width: innerWidth \}\)/)
+  assert.doesNotMatch(source, /bubble\.style\.right = loose \? Math\.max\(10, innerWidth - \(x \+ W \* k \/ 2 \+ 55\)\)/)
   assert.match(source, /sideTop \+ bubble\.offsetHeight <= innerHeight - HOME_GAP/)
   assert.match(source, /bubble\.style\.top = Math\.max\(8, Math\.min\(innerHeight - bubble\.offsetHeight - HOME_GAP/)
 })

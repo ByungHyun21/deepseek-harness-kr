@@ -43,7 +43,8 @@ test('sleep cancels departures, protects intro and wakes for waiting cards', asy
       addEventListener: (type, fn, options) => { assert.equal(options.capture, true); events.set(type, fn) },
       canvas: { style: {}, getBoundingClientRect: () => ({ left: 700 }) },
       bubble: { style: {}, classList: { contains: () => false } },
-      app: { ticker: { start: () => { stopped = false }, stop: () => { stopped = true } } },
+      app: { ticker: { get started() { return !stopped }, start: () => { stopped = false }, stop: () => { stopped = true } } },
+      setRender: (on) => { stopped = !on },   // 배치 코드가 쓰는 상태 기반 티커 제어 (테스트에선 stopped 로만 확인)
       document: { hidden: false, querySelector: (selector) => selector === 'stop' ? working : selector.includes(card) && card },
       window: { __dscSleep: { enabled: true, minutes: 0.5 } },
       PET: false, drag: {}, free: {}, link: {},
@@ -98,14 +99,15 @@ test('sleep preserves free placement, blocks dragging and never sleeps while the
     let now = 0, stopped = false, listeners = 0
     const frames = [], timers = [], lines = []
     const context = vm.createContext({
-      PET: petPage, innerWidth: 1000, innerHeight: 800, W: 200, H: 400, SHOW_K: 0.1, visH: 400,
+      PET: petPage, innerWidth: 1000, innerHeight: 800, W: 200, H: 400, SHOW_K: 0.1, visH: 400, MIN_SHOW_K: 0.18, coarsePointer: () => false, freeMode: () => 'desktop',
       performance: { now: () => now }, requestAnimationFrame: (fn) => frames.push(fn),
       setTimeout: (fn) => { timers.push(fn); return timers.length }, clearTimeout() {},
       addEventListener() { listeners++ },
-      drag: {}, free: { on: true, k: 0.8, fx: 0.3, fy: 0.6 }, link: {},
+      drag: {}, free: { on: true, k: 0.8, fx: 0.3, fy: 0.6, applied: true }, link: {},
       walk: { phase: '', timers: [], slideId: 0 }, intro: { phase: 'done' },
       canvas: { style: {}, getBoundingClientRect: () => ({ left: 220 }) }, bubble: { style: {} },
-      app: { ticker: { start() { stopped = false }, stop() { stopped = true } } },
+      app: { ticker: { get started() { return !stopped }, start() { stopped = false }, stop() { stopped = true } } },
+      setRender: (on) => { stopped = !on },   // 배치 코드가 쓰는 상태 기반 티커 제어 (테스트에선 stopped 로만 확인)
       keepIn: (q) => q, speak: (line) => lines.push(line), hush() {}, place() {},
     })
     const run = (s) => vm.runInContext(s, context)
@@ -318,17 +320,48 @@ test('settings page records the shortcut by pressing keys instead of typing it',
   } finally { h.dom.window.close() }
 })
 
+test('shortcut hint id stays unique and the character-off guidance uses its own id', () => {
+  for (const character of [true, false]) {
+    const h = clientHarness({ character, theme: false, translation: false })
+    try {
+      const ctx = h.ctx(); h.client.apply(ctx)
+      const Page = h.pages.get(packageName + '#deepseek-harness-kr')
+      const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
+      assert.equal((html.match(/id="deepseek-harness-kr-shortcut-hint"/g) || []).length, 1, '안내 id는 문서에 하나만 있어야 한다')
+      const off = (html.match(/id="deepseek-harness-kr-shortcut-hint-off"/g) || []).length
+      assert.equal(off, character ? 0 : 1, '꺼짐 안내는 별도 id로 한 번만')
+      if (!character) assert.match(html, /This shortcut still turns the character back on while it is off/)
+      ctx.dispose()
+    } finally { h.dom.window.close() }
+  }
+})
+
+test('empty drag key stays empty so both buttons are required again', () => {
+  const h = clientHarness({ character: true, theme: false, translation: false, dragKey: '' })
+  try {
+    const ctx = h.ctx(); h.client.apply(ctx)
+    assert.equal(h.dom.window.__dscDrag?.key, '', '빈 값이 Alt로 되돌아가면 안 된다')
+    const Page = h.pages.get(packageName + '#deepseek-harness-kr')
+    const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
+    assert.match(html, /aria-label="Record drag key"[^>]*value=""/)
+    assert.match(html, /Empty needs both buttons/)
+    ctx.dispose()
+  } finally { h.dom.window.close() }
+})
+
 test('drag key, pet window shortcut and canvas toggle are configurable and defaulted', () => {
   const defaults = readLive(Config({}))
   assert.equal(defaults.dragKey, 'Alt')
   assert.equal(defaults.petToggleKey, 'Ctrl+Shift+P')
   assert.equal(defaults.canvasToggle, false)
   assert.equal(defaults.canvasToggleKey, 'Ctrl+Shift+H')
-  const custom = readLive(Config({ dragKey: 'F', petToggleKey: '', canvasToggle: true, canvasToggleKey: 'H' }))
+  assert.equal(defaults.earHide, false)
+  const custom = readLive(Config({ dragKey: 'F', petToggleKey: '', canvasToggle: true, canvasToggleKey: 'H', earHide: true }))
   assert.equal(custom.dragKey, 'F')
   assert.equal(custom.petToggleKey, '')
   assert.equal(custom.canvasToggle, true)
   assert.equal(custom.canvasToggleKey, 'H')
+  assert.equal(custom.earHide, true)
 })
 
 test('drag key recorder accepts one modifier or one ordinary key', () => {
@@ -490,13 +523,14 @@ test('pet window settings panel is tall enough to avoid a needless scrollbar', a
 test('character source supports modifier drag and a pet window toggle', async () => {
   const source = await readFile(new URL('../../assets/dsc.js', import.meta.url), 'utf8')
   for (const code of [source, bundle]) {
-    assert.match(code, /const both = \(e\.buttons & 3\) === 3 \|\| dragKeyHeld\(e\)/)
+    assert.match(code, /const both = \(e\.buttons & 3\) === 3 \|\| touchGrab \|\| dragKeyHeld\(e\)/)
     assert.match(code, /window\.__dscPetToggle = petToggle/)
     assert.match(code, /link\.queue\.push\(\["drag", \[dragKeyRaw\(\)\]\]\)/)
     assert.match(code, /fn === "drag"\) window\.__dscDrag = \{ key: a\[0\] \}/)
     assert.match(code, /fn === "dragheld"\)/)
     assert.match(code, /window\.__dscCanvasToggle = \(\) => setHidden\(!hidden\)/)
     assert.match(code, /id = "dsc-hide-chip"/)
+    assert.match(code, /\["earHide", "동물귀 숨기기"\]/)   // 펫 창 우클릭 소품·옷 메뉴에도 같은 항목
   }
 })
 
@@ -669,9 +703,10 @@ test('plugin settings page exposes feature and power saving switches', () => {
     const Page = h.pages.get(packageName + '#deepseek-harness-kr')
     assert(Page)
     const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
-    assert.equal((html.match(/role="switch"/g) || []).length, 7)
-    assert.equal((html.match(/<input type="checkbox" role="switch" checked=""/g) || []).length, 4)
+    assert.equal((html.match(/role="switch"/g) || []).length, 8)
+    assert.equal((html.match(/<input type="checkbox" role="switch" checked=""/g) || []).length, 5)
     assert.match(html, /Character and speech bubbles/)
+    assert.match(html, /Show character on mobile/)
     assert.match(html, /Intro on startup/)
     assert.match(html, /App shortcut icon/)
     assert.match(html, /Pastel theme/)
@@ -690,13 +725,17 @@ test('settings page offers accessories, outfit and body type, and shares them wi
     const Page = h.pages.get(packageName + '#deepseek-harness-kr')
     const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
     assert.match(html, /aria-label="Accessories and outfit"/)
-    for (const label of ['Glasses', 'Monocle', 'Change skirt length', 'Change top', 'Take off shoes', 'Hide tail']) assert.match(html, new RegExp(label))
+    for (const label of ['Glasses', 'Monocle', 'Change skirt length', 'Change top', 'Take off shoes', 'Hide tail', 'Hide animal ears']) assert.match(html, new RegExp(label))
     assert.doesNotMatch(html, /basin|Lean forward/i)
     assert.equal((html.match(/type="radio"/g) || []).length, 3)
     assert.match(html, /type="radio" name="deepseek-harness-kr-body" checked=""[^>]*\/><span>Body type 2 \(chibi\)/)
-    assert.deepEqual({ ...h.dom.window.__dscOutfit }, { glasses: true, monocle: false, skirt: false, chestClothes: false, shoesOff: false, tailHide: false, bodyType: 'type2' })
+    assert.deepEqual({ ...h.dom.window.__dscOutfit }, { glasses: true, monocle: false, skirt: false, chestClothes: false, shoesOff: false, tailHide: false, earHide: false, bodyType: 'type2' })
     await h.form.set('bodyType', 'type1')
     assert.equal(h.dom.window.__dscOutfit.bodyType, 'type1')
+    await h.form.set('earHide', true)
+    assert.equal(h.dom.window.__dscOutfit.earHide, true, '귀 숨김 설정이 캐릭터(아웃핏)로 동기화되어야 한다')
+    await h.form.set('earHide', false)
+    assert.equal(h.dom.window.__dscOutfit.earHide, false)
     ctx.dispose()
     assert.equal(h.dom.window.__dscOutfit, undefined)
   } finally { h.dom.window.close() }
@@ -841,7 +880,7 @@ test('settings page shows the update section and still works without the plugin 
     const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
     assert.match(html, /aria-label="Updates"/)
     assert.match(html, /Plugin manager is unavailable/)
-    assert.equal((html.match(/role="switch"/g) || []).length, 7)
+    assert.equal((html.match(/role="switch"/g) || []).length, 8)
     ctx.dispose()
   } finally { h.dom.window.close() }
 })
@@ -946,7 +985,7 @@ test('settings page shows the voice section without needing a YAML edit', () => 
     assert.match(html, /AI-generated voice/)
     assert.match(html, /credential store is unavailable/)
     assert.match(html, /type="password"/)
-    assert.equal((html.match(/role="switch"/g) || []).length, 7, 'feature, intro, icon, sleep and canvas switches are present')
+    assert.equal((html.match(/role="switch"/g) || []).length, 8, 'feature, mobile, intro, icon, sleep and canvas switches are present')
     ctx.dispose()
   } finally { h.dom.window.close() }
 })
