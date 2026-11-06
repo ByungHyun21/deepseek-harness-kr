@@ -186,6 +186,7 @@ test('제자리 최소 크기 보정에서도 말풍선은 화면 오른쪽 기�
   const loose = source.slice(source.indexOf('const loose ='), source.indexOf('if (!coarsePointer() && !home.above)'))
   assert.match(loose, /const loose = PET \|\| \(free\.on && free\.applied\) \|\| !!free\.anim/)
   assert.doesNotMatch(loose, /dock !== home/)
+  assert.match(source, /bubble\.style\.right = loose \? innerWidth - \(x \+ \(W - visW\) \/ 2 \* k\) \+ 8 \+ "px" : "10px"/)
 })
 
 test('카드 아래 공간이 없을 때 말풍선은 뷰포트 안에 남는다', () => {
