@@ -182,6 +182,12 @@ test('데스크톱 말풍선은 예전 right 배치를 유지하고, 아래 공�
   assert.match(source, /bubble\.style\.top = Math\.max\(8, Math\.min\(innerHeight - bubble\.offsetHeight - HOME_GAP/)
 })
 
+test('제자리 최소 크기 보정에서도 말풍선은 화면 오른쪽 기준을 유지한다', () => {
+  const loose = source.slice(source.indexOf('const loose ='), source.indexOf('if (!coarsePointer() && !home.above)'))
+  assert.match(loose, /const loose = PET \|\| \(free\.on && free\.applied\) \|\| !!free\.anim/)
+  assert.doesNotMatch(loose, /dock !== home/)
+})
+
 test('카드 아래 공간이 없을 때 말풍선은 뷰포트 안에 남는다', () => {
   const vp = { w: 960, h: 1080, top: 0, left: 0 }
   const r = { left: 0, right: 960, top: 1000, bottom: 1080 }
