@@ -118,3 +118,13 @@ html body[data-ds-dark-theme] .dsc-composer {
 }
 html body[data-ds-dark-theme] .dsc-send { box-shadow: 0 4px 14px #ff8fbd40 !important; }
 html body[data-ds-dark-theme] .dsc-newsession { box-shadow: 0 6px 18px #6f8cff33 !important; }
+
+/* 겹쳐 뜨는 패널은 불투명하게.
+   DSH 0.2.2는 왼쪽 드로어를 var(--dsw-specific-sidebar-fill), 오른쪽 전체화면 패널을
+   var(--dsw-alias-bg-base)로 칠한다. 이 테마는 벽지가 비치도록 두 값을 투명으로 두는데,
+   좁은 화면에서는 패널이 채팅 위에 겹쳐 뜨므로 그대로 두면 앞뒤 구분이 안 된다.
+   드로어/전체화면 패널 안에서만 두 값을 불투명으로 바꾼다(데스크톱/일반 창 모드는 그대로). */
+html body [data-sidebar-drawer] [class*="sidebarCol"] { --dsw-specific-sidebar-fill: #ffffff !important; }
+html body [data-sidebar-right-panel="fullscreen"] { --dsw-alias-bg-base: #ffffff !important; }
+html body[data-ds-dark-theme] [data-sidebar-drawer] [class*="sidebarCol"] { --dsw-specific-sidebar-fill: #1b1c20 !important; }
+html body[data-ds-dark-theme] [data-sidebar-right-panel="fullscreen"] { --dsw-alias-bg-base: #151517 !important; }
