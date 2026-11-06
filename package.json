@@ -12,6 +12,8 @@
   },
   "files": [
     "plugin/host.js",
+    "plugin/app-icon.js",
+    "plugin/client.js",
     "plugins/dsh-tts/src/cache.js",
     "plugins/dsh-tts/src/config.js",
     "plugins/dsh-tts/src/host.js",
