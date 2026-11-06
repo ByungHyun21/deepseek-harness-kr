@@ -190,25 +190,9 @@ test('카드 아래 공간이 없을 때 말풍선은 뷰포트 안에 남는다
   assert.ok(pos.top + 40 <= vp.top + vp.h - 8)
 })
 
-test('텍스트 입력이 아닌 range·체크박스는 키보드 숨김 대상이 아니다', () => {
-  const fnSource = source.slice(source.indexOf('const activeTextInput'), source.indexOf('const keyboardOpen'))
-  const run = (el, pet = false) => {
-    const ctx = vm.createContext({
-      document: { activeElement: el },
-      PET: pet,
-      petPanelOpen: pet,
-      petPanel: pet ? { contains: () => true } : null,
-    })
-    return vm.runInContext(fnSource + '\nactiveTextInput()', ctx)
-  }
-  const input = (type) => ({ tagName: 'INPUT', type, isContentEditable: false, shadowRoot: null })
-  assert.equal(run(input('text')), true)
-  assert.equal(run(input('search')), true)
-  assert.equal(run(input('range')), false)
-  assert.equal(run(input('checkbox')), false)
-  assert.equal(run({ tagName: 'TEXTAREA', isContentEditable: false, shadowRoot: null }), true)
-  assert.equal(run({ tagName: 'DIV', isContentEditable: true, shadowRoot: null }), true)
-  assert.equal(run(input('range'), true), false, '펫 설정 패널 조작은 텍스트 입력이 아니다')
+test('모바일에서는 컴포저 포커스만으로 숨기지 않고 키보드 신호에만 반응한다', () => {
+  assert.match(source, /const typingActive = \(\) => coarsePointer\(\) && keyboardOpen\(\)/)
+  assert.doesNotMatch(source, /typingActive.*activeTextInput/)
 })
 
 test('캐릭터 바깥에서 시작한 터치 스크롤을 캐릭터 위에서 막지 않는다', () => {
@@ -217,15 +201,33 @@ test('캐릭터 바깥에서 시작한 터치 스크롤을 캐릭터 위에서 �
   assert.doesNotMatch(touchMove, /hitAt/)
 })
 
-test('모바일 숨김 상태에서는 시작 인트로를 끝내 다시 켜도 재생하지 않는다', () => {
+test('모바일 숨김과 키보드 숨김 상태에서는 시작 인트로를 끝낸다', () => {
   const hidden = source.slice(source.indexOf('if (mobileHidden())'), source.indexOf('if (typingActive())'))
+  const typing = source.slice(source.indexOf('if (typingActive())'), source.indexOf('const home = homePose();'))
   assert.match(hidden, /skipIntro\(\)/)
+  assert.match(typing, /skipIntro\(\)/)
 })
 
-test('입력 모드가 바뀌어도 세션의 자유 위치 상태를 지우지 않는다', () => {
+test('위로 올린 자리는 panned visualViewport에서도 카드 바로 위에 붙는다', () => {
+  const vp = { w: 390, h: 844, top: 40, left: 0 }
+  const r = { left: 0, right: 390, top: 560, bottom: 844 }
+  const pose = homeLayout({ vp, r, maxK: 2, minK: 0.42, ...dims })
+  assert.equal(pose.above, true)
+  assert.ok(Math.abs(pose.y + 300 * pose.k - (r.top - 8)) < 0.01)
+})
+
+test('터치로 제자리 근처에 놓아도 snap되어 자유 위치가 해제된다', () => {
+  const release = source.slice(source.indexOf('const release = ('), source.indexOf('let lastPlaceKey'))
+  assert.match(release, /const snapRange = touch \?/)
+  assert.doesNotMatch(release, /snap = !touch/)
+})
+
+test('입력 모드가 바뀌어도 세션의 자유 위치 상태를 지우지 않고 저장도 보류한다', () => {
   const guard = source.slice(source.indexOf('const currentMode = freeMode()'), source.indexOf('if (!free.on) return dockTarget(home);'))
   assert.match(guard, /free\.mode !== currentMode/)
+  assert.match(guard, /free\.applied = false/)
   assert.doesNotMatch(guard, /free\.on = false/)
+  assert.match(source, /if \(PET \|\| free\.applied === false\) return/)
 })
 
 test('모바일 자유 위치는 카드가 잠깐 없을 때 저장된 크기로 안정된다', () => {

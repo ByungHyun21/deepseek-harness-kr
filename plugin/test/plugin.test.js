@@ -102,7 +102,7 @@ test('sleep preserves free placement, blocks dragging and never sleeps while the
       performance: { now: () => now }, requestAnimationFrame: (fn) => frames.push(fn),
       setTimeout: (fn) => { timers.push(fn); return timers.length }, clearTimeout() {},
       addEventListener() { listeners++ },
-      drag: {}, free: { on: true, k: 0.8, fx: 0.3, fy: 0.6 }, link: {},
+      drag: {}, free: { on: true, k: 0.8, fx: 0.3, fy: 0.6, applied: true }, link: {},
       walk: { phase: '', timers: [], slideId: 0 }, intro: { phase: 'done' },
       canvas: { style: {}, getBoundingClientRect: () => ({ left: 220 }) }, bubble: { style: {} },
       app: { ticker: { start() { stopped = false }, stop() { stopped = true } } },
